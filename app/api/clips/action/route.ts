@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, clips } from "@/lib/db";
-import { isMock } from "@/lib/pipeline/config";
-import { dryRunPublisher, xPublisher } from "@/lib/pipeline/publishing";
+import { requireXEnv } from "@/lib/pipeline/env";
+import { xPublisher } from "@/lib/pipeline/publishing";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -29,7 +29,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const publisher = isMock() ? dryRunPublisher : xPublisher();
+    requireXEnv();
+    const publisher = xPublisher();
     const result = await publisher.publish(
       { clipUrl: clip.clipUrl ?? "", postText: clip.postText, costUsd: clip.costUsd ?? 0 },
       clip.replyTo ?? null,

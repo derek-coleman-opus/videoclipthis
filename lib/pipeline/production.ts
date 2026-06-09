@@ -30,16 +30,6 @@ export interface Clipper {
   produce(c: DetectedCandidate, m: Moment): Promise<ProducedClip>;
 }
 
-export const mockClipper: Clipper = {
-  async produce(c, m) {
-    return {
-      clipUrl: `https://mock.clips/${c.videoId}_${Math.round(m.startS)}-${Math.round(m.endS)}.mp4`,
-      postText: composePost(c, m),
-      costUsd: 0.04,
-    };
-  },
-};
-
 export function opusclipClipper(apiKey: string, base: string): Clipper {
   return {
     async produce(c, m) {

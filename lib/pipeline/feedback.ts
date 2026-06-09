@@ -1,26 +1,19 @@
 import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { db, candidates, clips, events } from "@/lib/db";
-import { isMock } from "./config";
 
 export interface FeedbackResult {
   updated: number;
   newReshares: number;
-  mock: boolean;
 }
 
-// TODO-LIVE: fetch real X metrics — GET /2/tweets?ids=...&tweet.fields=public_metrics for views,
-// and detect whether the speaker (candidate.speakerHandle) retweeted/quoted the post.
-async function fetchMetrics(xPostId: string, mock: boolean): Promise<{ views: number; reshared: boolean }> {
-  if (mock) {
-    const seed = xPostId.split("").reduce((a, ch) => a + ch.charCodeAt(0), 0);
-    return { views: 1000 + (seed % 9000) * 5, reshared: seed % 3 === 0 };
-  }
+// TODO-LIVE (§1.7): fetch real X metrics — GET /2/tweets?ids=...&tweet.fields=public_metrics for
+// views, and detect whether the speaker (candidate.speakerHandle) retweeted/quoted the post.
+async function fetchMetrics(_xPostId: string): Promise<{ views: number; reshared: boolean }> {
   return { views: 0, reshared: false };
 }
 
 /** Refresh metrics on posted clips + record new speaker reshares (the credit-first loop's signal). */
 export async function runFeedback(): Promise<FeedbackResult> {
-  const mock = isMock();
   const database = db();
   const posted = await database
     .select()
@@ -30,7 +23,7 @@ export async function runFeedback(): Promise<FeedbackResult> {
   let updated = 0;
   let newReshares = 0;
   for (const c of posted) {
-    const m = await fetchMetrics(c.xPostId as string, mock);
+    const m = await fetchMetrics(c.xPostId as string);
     const wasReshared = c.resharedBySpeaker ?? false;
     await database.update(clips)
       .set({ views: m.views, resharedBySpeaker: m.reshared || wasReshared })
@@ -46,7 +39,7 @@ export async function runFeedback(): Promise<FeedbackResult> {
       });
     }
   }
-  return { updated, newReshares, mock };
+  return { updated, newReshares };
 }
 
 /** Feed performance back into ranking: speakers whose clips were reshared earn a small score boost. */

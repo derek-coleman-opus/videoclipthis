@@ -1,7 +1,6 @@
 import { desc, eq, sql } from "drizzle-orm";
 import { db, candidates, clips, events, runs } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
-import { isMock } from "@/lib/pipeline/config";
 import RunButton from "@/components/RunButton";
 
 export const dynamic = "force-dynamic";
@@ -50,8 +49,8 @@ export default async function Dashboard() {
         <p className="font-medium text-amber-300">Database not ready</p>
         <p className="mt-1 text-neutral-300">{(e as Error).message}</p>
         <p className="mt-2 text-neutral-400">
-          Set <code>DATABASE_URL</code>, run <code>npm run db:push</code>, then POST{" "}
-          <code>/api/dev/seed</code> (or click “Run Scout now”).
+          Set <code>DATABASE_URL</code>, run <code>npm run db:push</code>, then click{" "}
+          “Run Scout now”.
         </p>
       </div>
     );
@@ -62,7 +61,6 @@ export default async function Dashboard() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex flex-wrap gap-2">
-          {isMock() && <span className="rounded bg-blue-900/60 px-2 py-0.5 text-xs text-blue-300">MOCK MODE</span>}
           {cfg.paused && <span className="rounded bg-red-900/60 px-2 py-0.5 text-xs text-red-300">PAUSED</span>}
           <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-300">autonomy: {cfg.autonomy}</span>
         </div>

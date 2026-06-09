@@ -5,13 +5,6 @@ export interface Selector {
   select(c: DetectedCandidate): Promise<Moment | null>;
 }
 
-/** Mock: returns a single canned moment. */
-export const mockSelector: Selector = {
-  async select() {
-    return { startS: 0, endS: 47, hookCaption: "the part everyone will quote", confidence: 0.9 };
-  },
-};
-
 export function opusclipSelector(opusKey: string, _anthropicKey: string): Selector {
   return {
     async select(c) {

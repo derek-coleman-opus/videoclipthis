@@ -1,4 +1,3 @@
-import { HIGH_AUTHORITY_CHANNELS } from "./config";
 import { withRetry } from "./util";
 import type { DetectedCandidate } from "./types";
 
@@ -21,21 +20,6 @@ clip-worthiness for an audience of AI/dev builders, weighting:
 - freshness (10): recent + window still open?
 - saturation (5, inverse): penalize already-widely-clipped.
 Return JSON: {"score": <int>, "rationale": "<short>"}.`;
-
-/** Heuristic scorer for mock mode / tests — no LLM call. */
-export const mockScorer: Scorer = {
-  async score(c) {
-    let s = 50;
-    if (HIGH_AUTHORITY_CHANNELS.has((c.channel ?? "").toLowerCase())) s += 30;
-    const hot = ["agents", "demo", "nobody expects", "live", "2027", "refactor"];
-    const t = (c.transcript ?? "").toLowerCase();
-    if (hot.some((w) => t.includes(w))) s += 10;
-    if (c.figureName) s += 20; // a tracked key AI figure is involved
-    if ((c.durationS ?? 0) < 900) s -= 20; // very short / likely filler
-    s = Math.max(0, Math.min(100, s));
-    return { score: s, rationale: "mock heuristic" };
-  },
-};
 
 function parseScore(text: string): Scored {
   try {

@@ -1,15 +1,14 @@
 import { eq } from "drizzle-orm";
 import { db, candidates, clips, summonRequests } from "@/lib/db";
-import { isMock } from "./config";
-import { mockSelector, opusclipSelector } from "./selection";
-import { mockClipper, opusclipClipper } from "./production";
-import { dryRunPublisher, xPublisher } from "./publishing";
+import { requireScoutEnv, requireXEnv } from "./env";
+import { opusclipSelector } from "./selection";
+import { opusclipClipper } from "./production";
+import { xPublisher } from "./publishing";
 import { logEvent } from "./runScout";
 import type { DetectedCandidate } from "./types";
 
 export interface SummonResult {
   processed: number;
-  mock: boolean;
 }
 
 interface Mention {
@@ -18,29 +17,23 @@ interface Mention {
   targetUrl: string;
 }
 
-// TODO-LIVE: poll X mentions of @videoclipthis (v2 userMentionTimeline with since_id) and pull the
-// target video URL from the mentioned/quoted/linked tweet. See build plan §7.
-async function fetchMentions(mock: boolean): Promise<Mention[]> {
-  if (mock) {
-    return [{ tweetId: "mock-mention-1", requester: "dev_curious", targetUrl: "https://youtu.be/DEMO123" }];
-  }
+// TODO-LIVE (§1.6): poll X mentions of @videoclipthis (v2 userMentionTimeline with since_id) and
+// pull the target video URL from the mentioned/quoted/linked tweet.
+async function fetchMentions(): Promise<Mention[]> {
   return [];
 }
 
 /** Reactive mode: clip whatever a user tags @videoclipthis under, and reply in-thread. */
 export async function runSummon(): Promise<SummonResult> {
-  const mock = isMock();
+  requireScoutEnv();
+  requireXEnv();
   const database = db();
-  const selector = mock
-    ? mockSelector
-    : opusclipSelector(process.env.OPUSCLIP_API_KEY ?? "", process.env.ANTHROPIC_API_KEY ?? "");
-  const clipper = mock
-    ? mockClipper
-    : opusclipClipper(process.env.OPUSCLIP_API_KEY ?? "", process.env.OPUSCLIP_API_BASE ?? "");
-  const publisher = mock ? dryRunPublisher : xPublisher();
+  const selector = opusclipSelector(process.env.OPUSCLIP_API_KEY ?? "", process.env.ANTHROPIC_API_KEY ?? "");
+  const clipper = opusclipClipper(process.env.OPUSCLIP_API_KEY ?? "", process.env.OPUSCLIP_API_BASE ?? "");
+  const publisher = xPublisher();
 
   let processed = 0;
-  for (const m of await fetchMentions(mock)) {
+  for (const m of await fetchMentions()) {
     // Dedup by mention id — never reply to the same summon twice.
     const seen = await database
       .select({ id: summonRequests.id })
@@ -73,14 +66,14 @@ export async function runSummon(): Promise<SummonResult> {
     await database.insert(clips).values({
       candidateId: cand.id, startS: moment.startS, endS: moment.endS, hookCaption: moment.hookCaption,
       postText: produced.postText, clipUrl: produced.clipUrl, kind: "summon",
-      status: mock ? "pending_review" : "posted", xPostId: result.xPostId, replyTo: m.tweetId,
-      costUsd: produced.costUsd, postedAt: mock ? null : new Date(),
+      status: "posted", xPostId: result.xPostId, replyTo: m.tweetId,
+      costUsd: produced.costUsd, postedAt: new Date(),
     });
     await database.update(summonRequests)
-      .set({ status: mock ? "clipped" : "replied" })
+      .set({ status: "replied" })
       .where(eq(summonRequests.id, req.id));
     await logEvent("replied", `Summon: replied to @${m.requester} with a clip of ${m.targetUrl}`, "summon_requests", req.id);
     processed++;
   }
-  return { processed, mock };
+  return { processed };
 }

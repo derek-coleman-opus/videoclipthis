@@ -8,57 +8,6 @@ export interface Source {
   discover(): Promise<DetectedCandidate[]>;
 }
 
-/** Deterministic demo source so the pipeline runs with no keys/network. */
-export const mockSource: Source = {
-  name: "mock",
-  async discover() {
-    return [
-      {
-        source: "youtube",
-        url: "https://youtu.be/DEMO123",
-        videoId: "DEMO123",
-        title: "The Future of Coding Agents",
-        speaker: "A. Researcher",
-        speakerHandle: "airesearcher",
-        channel: "Anthropic",
-        event: "AI Engineer Summit",
-        durationS: 3012,
-        signalStrength: 0.8,
-        transcript:
-          "... the thing nobody expects is that agents will write most code by 2027 ... " +
-          "here's the demo where Claude refactors a 200k-line repo live ...",
-      },
-      {
-        source: "youtube",
-        url: "https://youtu.be/SKIP456",
-        videoId: "SKIP456",
-        title: "Weekly channel update #214",
-        speaker: "Some Creator",
-        speakerHandle: "",
-        channel: "Random Vlog",
-        durationS: 600,
-        signalStrength: 0.1,
-        transcript: "hey everyone welcome back to the channel, smash that like button ...",
-      },
-      {
-        // No speakerHandle from the source — but because we TRACK this figure,
-        // matchFigure() resolves the @ so the clip is creditable + tagged.
-        source: "youtube",
-        url: "https://youtu.be/KARP99",
-        videoId: "KARP99",
-        title: "Andrej Karpathy on the future of LLM agents",
-        speaker: "Andrej Karpathy",
-        speakerHandle: "",
-        channel: "AI Engineer",
-        event: "AI Engineer Summit",
-        durationS: 2800,
-        signalStrength: 0.9,
-        transcript: "... agents are the new abstraction, here's a live demo ...",
-      },
-    ];
-  },
-};
-
 const YT_API = "https://www.googleapis.com/youtube/v3";
 const LONG_FORM_MIN_S = 12 * 60; // ignore anything shorter than ~12 min
 
@@ -205,8 +154,7 @@ export function youtubeSource(channels: { name: string; handle?: string }[], api
   };
 }
 
-export function buildSources(mock: boolean): Source[] {
-  if (mock) return [mockSource];
+export function buildSources(): Source[] {
   const sources: Source[] = [];
   if (WATCHLIST.youtubeChannels.length) {
     sources.push(youtubeSource(WATCHLIST.youtubeChannels, process.env.YOUTUBE_API_KEY ?? ""));

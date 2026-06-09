@@ -8,14 +8,6 @@ export interface Publisher {
   publish(clip: ProducedClip, replyTo?: string | null): Promise<PublishResult>;
 }
 
-/** Logs instead of posting. Used in mock mode and review-gated runs. */
-export const dryRunPublisher: Publisher = {
-  async publish(clip, replyTo) {
-    console.log(`[dry-run] would ${replyTo ? `reply to ${replyTo}` : "post"}:\n${clip.postText}`);
-    return { xPostId: null };
-  },
-};
-
 export function xPublisher(): Publisher {
   return {
     async publish(clip, replyTo) {
