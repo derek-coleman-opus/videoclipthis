@@ -105,6 +105,7 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       }).returning();
       await logEvent("found", `Found: ${d.title} (${src.name})${fig ? ` · 🎯 ${fig.name}` : ""}`, "candidates", cand.id);
 
+      try {
       const scored = await scorer.score(d);
       // Feed performance back into ranking: proven speakers (prior reshares) get a score boost.
       const boost = await reshareBoost(d.speakerHandle);
@@ -159,6 +160,10 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       } else {
         queued++;
         await logEvent("scored", `Queued for review [${score}]: ${d.title}`, "clips", clip.id);
+      }
+      } catch (e) {
+        await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, cand.id));
+        await logEvent("error", `Failed on "${d.title}": ${(e as Error).message}`, "candidates", cand.id);
       }
     }
     if (capped) break;
