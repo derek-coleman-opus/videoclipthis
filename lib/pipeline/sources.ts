@@ -1,5 +1,5 @@
 import { WATCHLIST, MAX_AGE_HOURS } from "./config";
-import { FIGURES } from "./figures";
+import { FIGURES, type Figure } from "./figures";
 import type { DetectedCandidate } from "./types";
 import { withRetry } from "./util";
 
@@ -113,6 +113,41 @@ async function recentUploads(channelId: string, apiKey: string): Promise<Detecte
   return out;
 }
 
+/** Recent videos that FEATURE a tracked figure, posted by ANYONE (interviews, talks, reposts).
+ *  We still credit + tag the figure since we know who we searched for. */
+async function searchFigureVideos(figure: Figure, apiKey: string, cutoffISO: string): Promise<DetectedCandidate[]> {
+  const s = await ytGet("search", {
+    part: "snippet", q: `"${figure.name}"`, type: "video", order: "date",
+    publishedAfter: cutoffISO, maxResults: "5",
+  }, apiKey);
+  const ids: string[] = (s.items ?? []).map((it: any) => it.id?.videoId).filter(Boolean);
+  if (!ids.length) return [];
+  const vids = await ytGet("videos", { part: "snippet,contentDetails", id: ids.join(",") }, apiKey);
+  const lastName = (figure.name.split(" ").pop() ?? figure.name).toLowerCase();
+  const out: DetectedCandidate[] = [];
+  for (const v of vids.items ?? []) {
+    const dur = parseDuration(v.contentDetails?.duration ?? "PT0S");
+    if (dur < LONG_FORM_MIN_S) continue;
+    const title: string = v.snippet?.title ?? "";
+    if (!title.toLowerCase().includes(lastName)) continue; // light noise filter: name in title
+    out.push({
+      source: "youtube",
+      url: `https://youtu.be/${v.id}`,
+      videoId: v.id,
+      title,
+      speaker: figure.name,
+      speakerHandle: figure.xHandle, // credit + tag the figure even though someone else posted it
+      channel: v.snippet?.channelTitle ?? "",
+      durationS: dur,
+      publishedAt: v.snippet?.publishedAt ? new Date(v.snippet.publishedAt) : null,
+      signalStrength: 0.6,
+      figureName: figure.name,
+      transcript: v.snippet?.description ?? "",
+    });
+  }
+  return out;
+}
+
 /** Resolve a channel to its ID: exact handle if given, else search by name. Logs what it picked. */
 async function resolveChannelId(c: { name: string; handle?: string }, apiKey: string): Promise<string | null> {
   try {
@@ -152,6 +187,16 @@ export function youtubeSource(channels: { name: string; handle?: string }[], api
           all.push(...(await recentUploads(id, apiKey)));
         } catch (e) {
           console.warn(`youtube channel ${id} failed: ${(e as Error).message}`);
+        }
+      }
+      // Also catch videos that FEATURE a tracked figure but were posted by someone else
+      // (interviews, talks, reposts) — search YouTube by the figure's name; still credited to them.
+      const cutoffISO = new Date(Date.now() - MAX_AGE_HOURS * 3600 * 1000).toISOString();
+      for (const f of FIGURES) {
+        try {
+          all.push(...(await searchFigureVideos(f, apiKey, cutoffISO)));
+        } catch (e) {
+          console.warn(`youtube figure search "${f.name}" failed: ${(e as Error).message}`);
         }
       }
       // TODO-LIVE: add WebSub/PubSubHubbub push for near-real-time detection (build plan §3.1).
