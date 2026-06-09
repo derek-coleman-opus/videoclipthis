@@ -2,6 +2,7 @@ import { WATCHLIST, MAX_AGE_HOURS } from "./config";
 import { FIGURES, type Figure } from "./figures";
 import type { DetectedCandidate } from "./types";
 import { withRetry } from "./util";
+import { transcriptOrDescription } from "./transcript";
 
 export interface Source {
   name: string;
@@ -54,9 +55,8 @@ async function recentUploads(channelId: string, apiKey: string): Promise<Detecte
       durationS: dur,
       publishedAt: published,
       signalStrength: 0.5,
-      // TODO-LIVE: fetch the real transcript (captions API or a timedtext/transcript service).
-      // Description is a weak stand-in so the scorer has signal until transcripts are wired.
-      transcript: v.snippet?.description ?? "",
+      // Real captions when available; falls back to the description so the scorer always has signal.
+      transcript: await transcriptOrDescription(v.id, v.snippet?.description ?? ""),
     });
   }
   return out;
@@ -91,7 +91,7 @@ async function searchFigureVideos(figure: Figure, apiKey: string, cutoffISO: str
       publishedAt: v.snippet?.publishedAt ? new Date(v.snippet.publishedAt) : null,
       signalStrength: 0.6,
       figureName: figure.name,
-      transcript: v.snippet?.description ?? "",
+      transcript: await transcriptOrDescription(v.id, v.snippet?.description ?? ""),
     });
   }
   return out;
