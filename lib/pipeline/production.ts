@@ -24,6 +24,7 @@ export interface ProducedClip {
   clipUrl: string;
   postText: string;
   costUsd: number;
+  durationS: number; // clip length, so the publisher can pick the right X media category
 }
 
 export interface Clipper {
@@ -34,7 +35,12 @@ export function opusclipClipper(apiKey: string, base: string): Clipper {
   return {
     async produce(c, m) {
       const r = await opusclipRender(c.url, m.startS, m.endS, apiKey, base);
-      return { clipUrl: r.clipUrl, postText: composePost(c, m), costUsd: r.costUsd };
+      return {
+        clipUrl: r.clipUrl,
+        postText: composePost(c, m),
+        costUsd: r.costUsd,
+        durationS: Math.max(0, Math.round(m.endS - m.startS)),
+      };
     },
   };
 }

@@ -33,7 +33,12 @@ export async function POST(req: NextRequest) {
     requireXEnv();
     const publisher = xPublisher();
     const result = await publisher.publish(
-      { clipUrl: clip.clipUrl ?? "", postText: clip.postText, costUsd: clip.costUsd ?? 0 },
+      {
+        clipUrl: clip.clipUrl ?? "",
+        postText: clip.postText,
+        costUsd: clip.costUsd ?? 0,
+        durationS: Math.max(0, Math.round((clip.endS ?? 0) - (clip.startS ?? 0))),
+      },
       clip.replyTo ?? null,
     );
     await database.update(clips)
