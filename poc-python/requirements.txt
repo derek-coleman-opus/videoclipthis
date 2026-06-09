@@ -1,0 +1,29 @@
+# M0 (mock pipeline) needs NONE of these — it runs on the stdlib.
+# Install per milestone as you wire live integrations.
+
+# Ranking + moment curation (M1)
+anthropic>=0.40
+
+# YouTube ingest + transcripts (M1)
+google-api-python-client>=2.0
+youtube-transcript-api>=0.6
+
+# OpusClip API client (M1)
+httpx>=0.27
+
+# Config (optional — falls back to built-in defaults if absent)
+pyyaml>=6.0
+
+# Podcasts (M2)
+feedparser>=6.0
+
+# X posting + summon listener (M2/M3)
+tweepy>=4.14
+
+# Scheduler + WebSub callback / review UI (M4)
+APScheduler>=3.10
+fastapi>=0.110
+uvicorn>=0.29
+
+# Candidate queue + state (M4)
+SQLModel>=0.0.14

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    { "path": "/api/cron/scout", "schedule": "*/30 * * * *" },
+    { "path": "/api/cron/summon", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/feedback", "schedule": "0 * * * *" }
+  ],
+  "comment": "Scout every 30 min; Summon (mention polling) every 5 min. Vercel sends Authorization: Bearer $CRON_SECRET to cron routes. (Sub-hourly crons require a Vercel Pro plan.)"
+}
