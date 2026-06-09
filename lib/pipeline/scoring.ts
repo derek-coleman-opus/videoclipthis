@@ -39,7 +39,6 @@ function parseScore(text: string): Scored {
 export function claudeScorer(apiKey: string, model = "claude-sonnet-4-6"): Scorer {
   return {
     async score(c) {
-      // TODO-LIVE: needs ANTHROPIC_API_KEY; confirm model id + response shape against the current API.
       const user = [
         `Title: ${c.title}`,
         `Channel: ${c.channel ?? ""}`,
