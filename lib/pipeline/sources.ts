@@ -1,4 +1,4 @@
-import { WATCHLIST } from "./config";
+import { WATCHLIST, MAX_AGE_HOURS } from "./config";
 import { FIGURES } from "./figures";
 import type { DetectedCandidate } from "./types";
 import { withRetry } from "./util";
@@ -61,7 +61,6 @@ export const mockSource: Source = {
 
 const YT_API = "https://www.googleapis.com/youtube/v3";
 const LONG_FORM_MIN_S = 12 * 60; // ignore anything shorter than ~12 min
-const RECENT_HOURS = 48;          // only surface fresh drops (first-to-clip)
 
 async function ytGet(path: string, params: Record<string, string>, apiKey: string): Promise<any> {
   const url = new URL(`${YT_API}/${path}`);
@@ -89,7 +88,7 @@ async function recentUploads(channelId: string, apiKey: string): Promise<Detecte
   const ids: string[] = (pl.items ?? []).map((it: any) => it.contentDetails?.videoId).filter(Boolean);
   if (!ids.length) return [];
   const vids = await ytGet("videos", { part: "snippet,contentDetails", id: ids.join(",") }, apiKey);
-  const cutoff = Date.now() - RECENT_HOURS * 3600 * 1000;
+  const cutoff = Date.now() - MAX_AGE_HOURS * 3600 * 1000;
   const out: DetectedCandidate[] = [];
   for (const v of vids.items ?? []) {
     const dur = parseDuration(v.contentDetails?.duration ?? "PT0S");
@@ -114,14 +113,38 @@ async function recentUploads(channelId: string, apiKey: string): Promise<Detecte
   return out;
 }
 
+/** Resolve a channel to its ID: exact handle if given, else search by name. Logs what it picked. */
+async function resolveChannelId(c: { name: string; handle?: string }, apiKey: string): Promise<string | null> {
+  try {
+    if (c.handle) {
+      const r = await ytGet("channels", { part: "id", forHandle: c.handle.replace(/^@/, "") }, apiKey);
+      const id = r.items?.[0]?.id;
+      if (id) return id;
+    }
+    const s = await ytGet("search", { part: "snippet", q: c.name, type: "channel", maxResults: "1" }, apiKey);
+    const item = s.items?.[0];
+    if (item?.id?.channelId) {
+      console.log(`youtube: "${c.name}" -> ${item.snippet?.title} (${item.id.channelId})`);
+      return item.id.channelId;
+    }
+    return null;
+  } catch (e) {
+    console.warn(`youtube: resolve "${c.name}" failed: ${(e as Error).message}`);
+    return null;
+  }
+}
+
 /** Watches org channels (WATCHLIST) + every tracked figure's channel for fresh long-form uploads. */
-export function youtubeSource(channels: { name: string; channelId: string }[], apiKey: string): Source {
+export function youtubeSource(channels: { name: string; handle?: string }[], apiKey: string): Source {
   return {
     name: "youtube",
     async discover() {
       if (!apiKey) return [];
       const ids = new Set<string>();
-      for (const c of channels) if (c.channelId && c.channelId !== "TODO") ids.add(c.channelId);
+      for (const c of channels) {
+        const id = await resolveChannelId(c, apiKey);
+        if (id) ids.add(id);
+      }
       for (const f of FIGURES) if (f.youtubeChannelId) ids.add(f.youtubeChannelId);
       const all: DetectedCandidate[] = [];
       for (const id of ids) {
