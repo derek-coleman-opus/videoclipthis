@@ -27,14 +27,16 @@ export const FIGURES: Figure[] = [
   { name: "Swyx", xHandle: "swyx", org: "Latent Space", role: "builder", priority: 2 },
 ];
 
-const byHandle = new Map(FIGURES.map((f) => [f.xHandle.toLowerCase(), f]));
-
-/** Match a detected candidate to a tracked figure by handle, or by name in the title/speaker/channel. */
-export function matchFigure(c: DetectedCandidate): Figure | null {
+/** Match a detected candidate to a tracked figure (from the given list) by handle,
+ *  or by the figure's name appearing in the title/speaker/channel. */
+export function matchFigure(figures: Figure[], c: DetectedCandidate): Figure | null {
   const handle = (c.speakerHandle ?? "").toLowerCase();
-  if (handle && byHandle.has(handle)) return byHandle.get(handle)!;
+  if (handle) {
+    const byHandle = figures.find((f) => f.xHandle.toLowerCase() === handle);
+    if (byHandle) return byHandle;
+  }
   const hay = `${c.title} ${c.speaker ?? ""} ${c.channel ?? ""}`.toLowerCase();
-  for (const f of FIGURES) {
+  for (const f of figures) {
     if (hay.includes(f.name.toLowerCase())) return f;
   }
   return null;
