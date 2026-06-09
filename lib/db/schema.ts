@@ -1,5 +1,5 @@
 import {
-  pgTable, serial, integer, real, text, boolean, timestamp, index,
+  pgTable, serial, integer, real, text, boolean, timestamp, index, uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 const ts = (name: string) => timestamp(name, { withTimezone: true });
@@ -96,9 +96,24 @@ export const settings = pgTable("settings", {
   updatedAt: ts("updated_at").defaultNow(),
 });
 
+/** Tracked AI figures — editable from the admin; seeded from code defaults on first use. */
+export const figures = pgTable("figures", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  xHandle: text("x_handle").notNull(),
+  org: text("org").default(""),
+  role: text("role").default(""),
+  priority: integer("priority").default(2),
+  youtubeChannelId: text("youtube_channel_id"),
+  createdAt: ts("created_at").defaultNow(),
+}, (t) => ({
+  handleIdx: uniqueIndex("figures_handle_idx").on(t.xHandle),
+}));
+
 export type Candidate = typeof candidates.$inferSelect;
 export type NewCandidate = typeof candidates.$inferInsert;
 export type Clip = typeof clips.$inferSelect;
 export type RunRow = typeof runs.$inferSelect;
 export type EventRow = typeof events.$inferSelect;
 export type Settings = typeof settings.$inferSelect;
+export type FigureRow = typeof figures.$inferSelect;

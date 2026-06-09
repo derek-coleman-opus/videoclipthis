@@ -10,6 +10,7 @@ import { mockClipper, opusclipClipper, needsCreditResolution } from "./productio
 import { dryRunPublisher, xPublisher } from "./publishing";
 import { matchFigure } from "./figures";
 import { reshareBoost } from "./feedback";
+import { getFigures } from "@/lib/figures-store";
 
 export interface ScoutResult {
   runId: number;
@@ -50,7 +51,8 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
     return { runId: run.id, found: 0, posted: 0, queued: 0, skipped: 0, mock, paused: true };
   }
 
-  const sources = buildSources(mock);
+  const figures = await getFigures();
+  const sources = buildSources(mock, figures);
   const scorer = mock ? mockScorer : claudeScorer(process.env.ANTHROPIC_API_KEY ?? "");
   const selector = mock
     ? mockSelector
@@ -81,7 +83,7 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
 
       // Track key AI figures: if a tracked figure is the speaker, resolve their @ so we can
       // always credit + tag them (turns an un-attributed talk into a creditable clip).
-      const fig = matchFigure(d);
+      const fig = matchFigure(figures, d);
       if (fig) {
         d.figureName = fig.name;
         if (!d.speakerHandle) d.speakerHandle = fig.xHandle;
