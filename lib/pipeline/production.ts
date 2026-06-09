@@ -1,4 +1,3 @@
-import { opusclipRender } from "./opusclip";
 import type { DetectedCandidate, Moment } from "./types";
 
 export const FOOTER = "🤖 found, clipped & posted by an agent · built on OpusClip · fork it";
@@ -31,14 +30,15 @@ export interface Clipper {
   produce(c: DetectedCandidate, m: Moment): Promise<ProducedClip>;
 }
 
-export function opusclipClipper(apiKey: string, base: string): Clipper {
+/** The clip is already rendered by OpusClip during selection — here we just compose the
+ *  credit-first post text around it. (Args kept for symmetry / future direct-render needs.) */
+export function opusclipClipper(_apiKey: string, _base: string): Clipper {
   return {
     async produce(c, m) {
-      const r = await opusclipRender(c.url, m.startS, m.endS, apiKey, base);
       return {
-        clipUrl: r.clipUrl,
+        clipUrl: m.clipUrl,
         postText: composePost(c, m),
-        costUsd: r.costUsd,
+        costUsd: m.costUsd,
         durationS: Math.max(0, Math.round(m.endS - m.startS)),
       };
     },
