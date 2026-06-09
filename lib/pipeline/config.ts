@@ -22,7 +22,8 @@ export const DEFAULT_THRESHOLD = 70;
 export const COST_CAP_USD = Number(process.env.COST_CAP_USD ?? 5);
 export const MAX_CLIPS_PER_RUN = Number(process.env.MAX_CLIPS_PER_RUN ?? 25);
 
-/** Mock mode runs the full pipeline with no external APIs — used until keys land. */
+/** Mock mode (explicit opt-in only): runs the pipeline on canned demo data, no external APIs.
+ *  Default OFF — real mode needs the API keys + go-live wiring (see README "Going live"). */
 export function isMock(): boolean {
-  return process.env.MOCK_MODE === "1" || !process.env.OPUSCLIP_API_KEY;
+  return process.env.MOCK_MODE === "1";
 }
