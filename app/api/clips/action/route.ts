@@ -5,7 +5,8 @@ import { requireXEnv } from "@/lib/pipeline/env";
 import { xPublisher } from "@/lib/pipeline/publishing";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// Approving a clip uploads video to X (chunked + processing wait) — allow more than 60s.
+export const maxDuration = 300;
 
 // Approve (→ publish to X) or reject a clip waiting in the review queue. Admin basic-auth (middleware).
 export async function POST(req: NextRequest) {

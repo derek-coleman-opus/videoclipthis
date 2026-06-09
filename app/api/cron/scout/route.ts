@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { runScout } from "@/lib/pipeline/runScout";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// Clipping (OpusClip analyze + render) can take minutes — needs more than the 60s default.
+export const maxDuration = 300;
 
 // Vercel Cron calls this on a schedule (see vercel.json) with Authorization: Bearer $CRON_SECRET.
 export async function GET(req: NextRequest) {
