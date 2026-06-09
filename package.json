@@ -9,7 +9,11 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "scout": "tsx --env-file=.env scripts/run.ts scout",
+    "summon": "tsx --env-file=.env scripts/run.ts summon",
+    "feedback": "tsx --env-file=.env scripts/run.ts feedback",
+    "pipeline": "tsx --env-file=.env scripts/run.ts pipeline"
   },
   "dependencies": {
     "@neondatabase/serverless": "^0.10.4",
