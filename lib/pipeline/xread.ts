@@ -61,4 +61,68 @@ export async function didHandleReshare(tweetId: string, handle: string): Promise
   return false;
 }
 
+/** User-context v2 client (the posting creds) — needed for endpoints like /2/users/me. */
+async function v2rw() {
+  const { TwitterApi } = await import("twitter-api-v2");
+  return new TwitterApi({
+    appKey: process.env.X_API_KEY ?? "",
+    appSecret: process.env.X_API_SECRET ?? "",
+    accessToken: process.env.X_ACCESS_TOKEN ?? "",
+    accessSecret: process.env.X_ACCESS_SECRET ?? "",
+  }).v2;
+}
+
+/** The bot's own X user id (cache it — it never changes). */
+export async function getBotUserId(): Promise<string> {
+  const me: any = await withRetry(async () => (await v2rw()).me(), { label: "x me" });
+  return me.data.id;
+}
+
+export interface MentionRaw {
+  tweetId: string;
+  requester: string;
+  targetUrl: string | null;
+}
+
+/** Pull the first http(s) URL out of a tweet's entities (expanded form preferred). */
+function urlsFromTweet(t: any): string[] {
+  return (t?.entities?.urls ?? [])
+    .map((u: any) => u.expanded_url ?? u.url)
+    .filter((u: string) => /^https?:\/\//.test(u ?? ""));
+}
+
+/**
+ * New @mentions since `sinceId`. The target video URL is taken from the mention itself, else
+ * from the tweet it replied to / quoted (people usually tag the bot under the video).
+ */
+export async function fetchMentions(
+  userId: string,
+  sinceId?: string | null,
+): Promise<{ mentions: MentionRaw[]; newestId: string | null }> {
+  const client = await v2();
+  const params: any = {
+    max_results: 50,
+    expansions: ["referenced_tweets.id", "author_id", "referenced_tweets.id.author_id"],
+    "tweet.fields": ["entities", "referenced_tweets", "author_id"],
+    "user.fields": ["username"],
+  };
+  if (sinceId) params.since_id = sinceId;
+
+  const res: any = await withRetry(() => client.userMentionTimeline(userId, params), { label: "x mentions" });
+  const tweets: any[] = res.tweets ?? [];
+  const includes = res.includes;
+
+  const mentions: MentionRaw[] = tweets.map((t) => {
+    const referenced = includes?.repliedTo?.(t) ?? includes?.quote?.(t);
+    const urls = urlsFromTweet(t).length ? urlsFromTweet(t) : urlsFromTweet(referenced);
+    return {
+      tweetId: t.id,
+      requester: includes?.author?.(t)?.username ?? "",
+      targetUrl: urls[0] ?? null,
+    };
+  });
+
+  return { mentions, newestId: res.meta?.newest_id ?? null };
+}
+
 export { v2 as xReadV2 };
