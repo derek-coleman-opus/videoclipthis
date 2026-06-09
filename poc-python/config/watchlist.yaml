@@ -1,0 +1,31 @@
+# THE FORK POINT — change these to point @videoclipthis at your niche.
+# Channel IDs / RSS URLs marked TODO must be filled before live (M1) runs;
+# the --mock pipeline ignores these and uses built-in demo data.
+
+youtube_channels:
+  - name: Anthropic
+    channel_id: TODO        # e.g. UCrDwWp7EBBv4NwvScIpBDOA
+  - name: Google DeepMind
+    channel_id: TODO
+  - name: OpenAI
+    channel_id: TODO
+  - name: AI Engineer
+    channel_id: TODO
+
+podcasts:
+  - name: Latent Space
+    rss: TODO
+  - name: Dwarkesh Patel
+    rss: TODO
+
+# X accounts whose video links / Spaces are strong signals
+x_signal_accounts:
+  - karpathy
+  - AnthropicAI
+  - GoogleDeepMind
+  - OpenAIDevs
+
+# Subreddits to scan for early buzz pointing at talks/videos
+subreddits:
+  - LocalLLaMA
+  - MachineLearning

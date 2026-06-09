@@ -1,0 +1,10 @@
+# Clip-worthiness rubric (the precision gate). See build plan §3.3.
+# A candidate must score >= threshold to proceed to clipping.
+weights:
+  authority: 25     # high-signal speaker/org (Anthropic/DeepMind/OpenAI researcher, known founder)
+  novelty: 20       # new release / announcement / genuinely new info vs. evergreen rehash
+  relevance: 20     # is this what AI/dev builders care about right now?
+  virality: 20      # strong claims, quotable lines, a demo, a hot take, a "wow"
+  freshness: 10     # how recent; is the window still open?
+  saturation: 5     # inverse — penalize already-widely-clipped
+threshold: 70
