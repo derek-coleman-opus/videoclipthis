@@ -43,11 +43,7 @@ npm run pipeline    # scout, then summon, then feedback (the full cycle)
 2. Add a Postgres store (Vercel Postgres/Neon) → it sets `DATABASE_URL`.
 3. Set env vars: `ADMIN_PASSWORD`, `CRON_SECRET` (any random string), plus all the service keys below.
 4. Run `npm run db:push` against the Neon URL (locally or via a one-off) to create tables.
-5. Deploy. `vercel.json` currently runs one **daily** cron (`/api/cron/daily`, which does scout → summon → feedback in one pass) and `maxDuration` is 60s — both **Hobby-compatible**. The admin is the site root (basic-auth protected). Keep autonomy on `review` until the clip quality is proven, then switch to `auto` in Settings.
-
-**On Vercel Pro, restore the real cadence** (the clip pipeline needs >60s for OpusClip render polling, which Hobby can't provide):
-- `vercel.json` crons → `{ "/api/cron/scout": "*/30 * * * *", "/api/cron/summon": "*/5 * * * *", "/api/cron/feedback": "0 * * * *" }`
-- bump `maxDuration` back to `300` in the `app/api/cron/*`, `app/api/run`, and `app/api/clips/action` routes.
+5. Deploy. `vercel.json` runs **scout** every 30 min, **summon** every 5 min, and **feedback** hourly, with `maxDuration=300` on the pipeline routes (requires **Vercel Pro** — Hobby caps crons at daily and functions at 60s). The admin is the site root (basic-auth protected). Keep autonomy on `review` until the clip quality is proven, then switch to `auto` in Settings.
 
 ## Going live
 
