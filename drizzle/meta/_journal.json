@@ -15,6 +15,13 @@
       "when": 1781108814813,
       "tag": "0001_serious_hemingway",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781123462850,
+      "tag": "0002_tricky_masked_marvel",
+      "breakpoints": true
     }
   ]
 }

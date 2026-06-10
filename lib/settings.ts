@@ -23,9 +23,9 @@ export async function updateSettings(
   return updated;
 }
 
-/** Persist Summon-poll state (the last processed mention id + cached bot user id). */
+/** Persist pipeline state (Summon poll cursor, cached bot user id, figure-search throttle). */
 export async function updateSummonState(
-  patch: Partial<{ summonSinceId: string | null; xBotUserId: string | null }>,
+  patch: Partial<{ summonSinceId: string | null; xBotUserId: string | null; figureSearchAt: Date | null }>,
 ): Promise<void> {
   const database = db();
   await getSettings();

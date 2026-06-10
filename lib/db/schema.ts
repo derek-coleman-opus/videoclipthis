@@ -95,6 +95,7 @@ export const settings = pgTable("settings", {
   autonomy: text("autonomy").notNull().default("review"), // review|assisted|auto
   summonSinceId: text("summon_since_id"),                 // last @mention id processed (Summon poll cursor)
   xBotUserId: text("x_bot_user_id"),                      // cached id of the bot's own X account
+  figureSearchAt: ts("figure_search_at"),                 // last figure-search run (quota throttle)
   updatedAt: ts("updated_at").defaultNow(),
 });
 
