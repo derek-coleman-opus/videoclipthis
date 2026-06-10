@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { runFeedback } from "@/lib/pipeline/feedback";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// Pro budget: metrics + reshare lookups across many posted clips can exceed 60s.
+export const maxDuration = 300;
 
 // Vercel Cron refreshes clip metrics + reshare signals (Authorization: Bearer $CRON_SECRET).
 export async function GET(req: NextRequest) {

@@ -5,8 +5,8 @@ import { requireXEnv } from "@/lib/pipeline/env";
 import { xPublisher } from "@/lib/pipeline/publishing";
 
 export const dynamic = "force-dynamic";
-// Hobby caps functions at 60s; on Vercel Pro raise to 300 — video upload + processing wait needs it.
-export const maxDuration = 60;
+// Pro budget: video upload + X media processing wait can exceed 60s.
+export const maxDuration = 300;
 
 // Approve (→ publish to X) or reject a clip waiting in the review queue. Admin basic-auth (middleware).
 export async function POST(req: NextRequest) {
