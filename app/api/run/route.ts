@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { runScout } from "@/lib/pipeline/runScout";
 
 export const dynamic = "force-dynamic";
-// Manual scout run does the full clip pipeline — allow the longer budget.
-export const maxDuration = 300;
+// Hobby caps functions at 60s; on Vercel Pro raise to 300 — the full clip pipeline needs it.
+export const maxDuration = 60;
 
 // Manual "Run Scout now" trigger from the admin panel (force ignores the paused flag).
 export async function POST() {
