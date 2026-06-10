@@ -1,46 +1,51 @@
 import { eq } from "drizzle-orm";
 import { db, candidates, clips, summonRequests } from "@/lib/db";
-import { isMock } from "./config";
-import { mockSelector, opusclipSelector } from "./selection";
-import { mockClipper, opusclipClipper } from "./production";
-import { dryRunPublisher, xPublisher } from "./publishing";
+import { requireScoutEnv, requireXEnv, requireXReadEnv } from "./env";
+import { getSettings, updateSummonState } from "@/lib/settings";
+import { opusclipSelector } from "./selection";
+import { opusclipClipper } from "./production";
+import { xPublisher } from "./publishing";
 import { logEvent } from "./runScout";
+import { fetchMentions, getBotUserId } from "./xread";
 import type { DetectedCandidate } from "./types";
 
 export interface SummonResult {
   processed: number;
-  mock: boolean;
 }
 
-interface Mention {
-  tweetId: string;
-  requester: string;
-  targetUrl: string;
-}
-
-// TODO-LIVE: poll X mentions of @videoclipthis (v2 userMentionTimeline with since_id) and pull the
-// target video URL from the mentioned/quoted/linked tweet. See build plan §7.
-async function fetchMentions(mock: boolean): Promise<Mention[]> {
-  if (mock) {
-    return [{ tweetId: "mock-mention-1", requester: "dev_curious", targetUrl: "https://youtu.be/DEMO123" }];
-  }
-  return [];
-}
+// Never fire off more than this many summon replies in a single poll — guards against a
+// thundering herd of mentions (and the X policy "don't be spammy" line).
+const MAX_REPLIES_PER_RUN = 5;
 
 /** Reactive mode: clip whatever a user tags @videoclipthis under, and reply in-thread. */
 export async function runSummon(): Promise<SummonResult> {
-  const mock = isMock();
+  requireScoutEnv();
+  requireXEnv();
+  requireXReadEnv();
   const database = db();
-  const selector = mock
-    ? mockSelector
-    : opusclipSelector(process.env.OPUSCLIP_API_KEY ?? "", process.env.ANTHROPIC_API_KEY ?? "");
-  const clipper = mock
-    ? mockClipper
-    : opusclipClipper(process.env.OPUSCLIP_API_KEY ?? "", process.env.OPUSCLIP_API_BASE ?? "");
-  const publisher = mock ? dryRunPublisher : xPublisher();
+  const selector = opusclipSelector(process.env.OPUSCLIP_API_KEY ?? "", process.env.ANTHROPIC_API_KEY ?? "");
+  const clipper = opusclipClipper(process.env.OPUSCLIP_API_KEY ?? "", process.env.OPUSCLIP_API_BASE ?? "");
+  const publisher = xPublisher();
 
+  // Resolve + cache the bot's own user id, then poll mentions since the last processed one.
+  const cfg = await getSettings();
+  let botUserId = cfg.xBotUserId;
+  if (!botUserId) {
+    botUserId = await getBotUserId();
+    await updateSummonState({ xBotUserId: botUserId });
+  }
+  const { mentions } = await fetchMentions(botUserId, cfg.summonSinceId);
+
+  // Process oldest-first and advance the cursor only past mentions we actually handle, so a
+  // burst larger than the per-run cap is resumed next poll instead of being skipped.
+  const ascending = [...mentions].reverse();
+  let cursor: string | null = cfg.summonSinceId ?? null;
   let processed = 0;
-  for (const m of await fetchMentions(mock)) {
+  for (const m of ascending) {
+    if (processed >= MAX_REPLIES_PER_RUN) break;
+    cursor = m.tweetId; // committing to a decision on this mention now
+    if (!m.targetUrl) continue; // nothing to clip — no video URL in the mention or its parent
+
     // Dedup by mention id — never reply to the same summon twice.
     const seen = await database
       .select({ id: summonRequests.id })
@@ -73,14 +78,17 @@ export async function runSummon(): Promise<SummonResult> {
     await database.insert(clips).values({
       candidateId: cand.id, startS: moment.startS, endS: moment.endS, hookCaption: moment.hookCaption,
       postText: produced.postText, clipUrl: produced.clipUrl, kind: "summon",
-      status: mock ? "pending_review" : "posted", xPostId: result.xPostId, replyTo: m.tweetId,
-      costUsd: produced.costUsd, postedAt: mock ? null : new Date(),
+      status: "posted", xPostId: result.xPostId, replyTo: m.tweetId,
+      costUsd: produced.costUsd, postedAt: new Date(),
     });
     await database.update(summonRequests)
-      .set({ status: mock ? "clipped" : "replied" })
+      .set({ status: "replied" })
       .where(eq(summonRequests.id, req.id));
     await logEvent("replied", `Summon: replied to @${m.requester} with a clip of ${m.targetUrl}`, "summon_requests", req.id);
     processed++;
   }
-  return { processed, mock };
+
+  // Advance the poll cursor so the next run only sees newer mentions.
+  if (cursor && cursor !== cfg.summonSinceId) await updateSummonState({ summonSinceId: cursor });
+  return { processed };
 }

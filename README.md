@@ -16,41 +16,57 @@ Vercel Cron ──GET /api/cron/scout──▶ runScout() ──writes──▶ 
                               OpusClip · Claude · YouTube · X  (real clients: M-next)
 ```
 
-One Next.js app: the pipeline lives in `lib/pipeline/*`, the activity store is Drizzle/Postgres (`lib/db`), the Scout runs on Vercel Cron (`vercel.json`), and the admin UI is `app/*`. **Mock mode runs the whole thing end-to-end with no external APIs**, so you can deploy and see it working before any keys exist.
+One Next.js app: the pipeline lives in `lib/pipeline/*`, the activity store is Drizzle/Postgres (`lib/db`), the crons run on Vercel Cron (`vercel.json`), and the admin UI is `app/*`. **There is no mock mode** — every run hits the real services and aborts loudly if a required key is missing. The safety net is the `autonomy=review` gate: in review mode the pipeline discovers, scores, and clips, but never posts until you approve a clip in the admin.
 
 ## Local quickstart
 
 ```bash
 npm install
-cp .env.example .env            # set DATABASE_URL (Neon) + ADMIN_PASSWORD; leave MOCK_MODE=1
+cp .env.example .env            # set DATABASE_URL (Neon), ADMIN_PASSWORD, and the service keys below
 npm run db:push                 # create tables
 npm run dev                     # http://localhost:3000  (basic-auth: any user + ADMIN_PASSWORD)
 ```
-Then click **Run Scout now** on the dashboard (or `POST /api/dev/seed` for richer demo data).
+Then click **Run Scout now** on the dashboard, or run a cycle from the terminal:
+
+```bash
+npm run scout       # discover -> score -> clip -> queue (review) / post (auto)
+npm run summon      # process new @mentions and reply with clips
+npm run feedback    # refresh views + speaker-reshare signal on posted clips
+npm run pipeline    # scout, then summon, then feedback (the full cycle)
+```
 
 > Verify before claiming done: `npm run typecheck && npm run build`.
 
-## Deploy to Vercel
+## Deploy to Vercel (Pro — for frequent crons)
 
 1. Push this folder to a GitHub repo; **Import** it in Vercel.
 2. Add a Postgres store (Vercel Postgres/Neon) → it sets `DATABASE_URL`.
-3. Set env vars: `ADMIN_PASSWORD`, `CRON_SECRET` (any random string), `MOCK_MODE=1`.
+3. Set env vars: `ADMIN_PASSWORD`, `CRON_SECRET` (any random string), plus all the service keys below.
 4. Run `npm run db:push` against the Neon URL (locally or via a one-off) to create tables.
-5. Deploy. The Scout cron in `vercel.json` runs automatically every 30 min; the admin is the site root (basic-auth protected).
+5. Deploy. `vercel.json` currently runs one **daily** cron (`/api/cron/daily`, which does scout → summon → feedback in one pass) and `maxDuration` is 60s — both **Hobby-compatible**. The admin is the site root (basic-auth protected). Keep autonomy on `review` until the clip quality is proven, then switch to `auto` in Settings.
 
-## Going live (M-next)
+**On Vercel Pro, restore the real cadence** (the clip pipeline needs >60s for OpusClip render polling, which Hobby can't provide):
+- `vercel.json` crons → `{ "/api/cron/scout": "*/30 * * * *", "/api/cron/summon": "*/5 * * * *", "/api/cron/feedback": "0 * * * *" }`
+- bump `maxDuration` back to `300` in the `app/api/cron/*`, `app/api/run`, and `app/api/clips/action` routes.
 
-Mock mode is on until real clients are wired. Each is an isolated stub with the exact interface already in place:
+## Going live
 
-| File | Wire up | Build-plan ref |
-|---|---|---|
-| `lib/pipeline/sources.ts` | YouTube WebSub + Data API ingest + transcripts | §3.1 |
-| `lib/pipeline/scoring.ts` | Claude rubric scorer | §3.3 |
-| `lib/pipeline/selection.ts` | OpusClip ClipAnything + Claude curator | §3.4 |
-| `lib/pipeline/production.ts` | OpusClip clip/reframe/caption/export | §4 |
-| `lib/pipeline/publishing.ts` | X v2 post/reply (Automated label) + Summon | §4/§7 |
+The pipeline is wired to real services; you only need keys and the X account label.
 
-Then set the keys (below), `MOCK_MODE=0`, and raise **autonomy** in Settings from `review` → `auto` once the ranking is trusted.
+| File | Live integration |
+|---|---|
+| `lib/pipeline/sources.ts` + `transcript.ts` | YouTube Data API ingest + caption transcripts |
+| `lib/pipeline/scoring.ts` | Claude rubric scorer |
+| `lib/pipeline/selection.ts` + `opusclip.ts` | OpusClip ClipAnything project (async create → poll clips) |
+| `lib/pipeline/production.ts` | Credit-first post around the OpusClip-rendered clip |
+| `lib/pipeline/publishing.ts` | X v2 post/reply with native video (needs the **Automated** label) |
+| `lib/pipeline/summon.ts` + `feedback.ts` + `xread.ts` | X mention polling + metrics/reshare reads |
+
+> **OpusClip note:** the client follows the published contract (`POST /api/clip-projects` →
+> poll `GET /api/exportable-clips?q=findByProjectId`; clip fields `uriForExport`, `score`,
+> `durationMs`, `title`). Two enum values remain to confirm with the API team (marked
+> `TODO-CONFIRM` in `opusclip.ts`): `curationPref.model` ("ClipAnything") and
+> `renderPref.layoutAspectRatio` ("9:16").
 
 ### Access checklist
 | Need | For | Where |

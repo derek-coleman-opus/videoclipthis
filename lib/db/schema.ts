@@ -93,6 +93,8 @@ export const settings = pgTable("settings", {
   paused: boolean("paused").notNull().default(false),
   threshold: integer("threshold").notNull().default(70),
   autonomy: text("autonomy").notNull().default("review"), // review|assisted|auto
+  summonSinceId: text("summon_since_id"),                 // last @mention id processed (Summon poll cursor)
+  xBotUserId: text("x_bot_user_id"),                      // cached id of the bot's own X account
   updatedAt: ts("updated_at").defaultNow(),
 });
 

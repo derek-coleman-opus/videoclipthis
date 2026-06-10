@@ -17,7 +17,7 @@ export default async function SettingsPage() {
       <SettingsForm initial={{ paused: cfg.paused, threshold: cfg.threshold, autonomy: cfg.autonomy }} />
       <p className="mt-6 max-w-md text-xs leading-relaxed text-neutral-500">
         <b>Autonomy</b> — <b>review</b> queues every clip for your approval (default, safest while tuning the
-        ranking). <b>auto</b> posts to X automatically above the threshold (only when live, never in mock mode).
+        ranking). <b>auto</b> posts to X automatically above the threshold.
         <br />
         <b>Threshold</b> is the clip-worthiness gate (0–100); raise it to be more selective.
       </p>

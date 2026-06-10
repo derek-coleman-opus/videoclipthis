@@ -1,13 +1,14 @@
 import { eq } from "drizzle-orm";
 import { db, candidates, clips, events, runs } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
-import { isMock, DEFAULT_THRESHOLD, COST_CAP_USD, MAX_CLIPS_PER_RUN } from "./config";
+import { DEFAULT_THRESHOLD, COST_CAP_USD, MAX_CLIPS_PER_RUN } from "./config";
+import { requireScoutEnv, requireXEnv } from "./env";
 import { slog } from "./util";
 import { buildSources } from "./sources";
-import { mockScorer, claudeScorer } from "./scoring";
-import { mockSelector, opusclipSelector } from "./selection";
-import { mockClipper, opusclipClipper, needsCreditResolution } from "./production";
-import { dryRunPublisher, xPublisher } from "./publishing";
+import { claudeScorer } from "./scoring";
+import { opusclipSelector } from "./selection";
+import { opusclipClipper, needsCreditResolution } from "./production";
+import { xPublisher } from "./publishing";
 import { matchFigure } from "./figures";
 import { reshareBoost } from "./feedback";
 import { getFigures } from "@/lib/figures-store";
@@ -18,7 +19,6 @@ export interface ScoutResult {
   posted: number;
   queued: number;
   skipped: number;
-  mock: boolean;
   paused?: boolean;
 }
 
@@ -33,37 +33,36 @@ export async function logEvent(
 
 /**
  * The Scout pipeline: ingest -> score (gate) -> credit-check -> select -> produce -> publish,
- * persisting every step. Auto-publishes to X only when not mock AND autonomy === "auto";
- * otherwise clips are queued for review (pending_review) and shown in the admin.
+ * persisting every step. Auto-publishes to X only when autonomy === "auto"; otherwise clips
+ * are queued for review (pending_review) and shown in the admin. No mock fallback — a run
+ * aborts up front if the required external-service keys are missing.
  */
 export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult> {
-  const mock = isMock();
+  requireScoutEnv();
   const cfg = await getSettings();
   const database = db();
 
-  const [run] = await database.insert(runs).values({ kind: "scout", mock }).returning();
+  const [run] = await database.insert(runs).values({ kind: "scout" }).returning();
 
   if (cfg.paused && !opts?.force) {
     await database.update(runs)
       .set({ finishedAt: new Date(), errors: "paused" })
       .where(eq(runs.id, run.id));
     await logEvent("run", "Scout skipped — paused");
-    return { runId: run.id, found: 0, posted: 0, queued: 0, skipped: 0, mock, paused: true };
+    return { runId: run.id, found: 0, posted: 0, queued: 0, skipped: 0, paused: true };
   }
 
+  const autoPost = cfg.autonomy === "auto";
+  if (autoPost) requireXEnv();
+
   const figures = await getFigures();
-  const sources = buildSources(mock, figures);
-  const scorer = mock ? mockScorer : claudeScorer(process.env.ANTHROPIC_API_KEY ?? "");
-  const selector = mock
-    ? mockSelector
-    : opusclipSelector(process.env.OPUSCLIP_API_KEY ?? "", process.env.ANTHROPIC_API_KEY ?? "");
-  const clipper = mock
-    ? mockClipper
-    : opusclipClipper(process.env.OPUSCLIP_API_KEY ?? "", process.env.OPUSCLIP_API_BASE ?? "");
-  const autoPost = !mock && cfg.autonomy === "auto";
-  const publisher = autoPost ? xPublisher() : dryRunPublisher;
+  const sources = buildSources(figures);
+  const scorer = claudeScorer(process.env.ANTHROPIC_API_KEY ?? "");
+  const selector = opusclipSelector(process.env.OPUSCLIP_API_KEY ?? "", process.env.ANTHROPIC_API_KEY ?? "");
+  const clipper = opusclipClipper(process.env.OPUSCLIP_API_KEY ?? "", process.env.OPUSCLIP_API_BASE ?? "");
+  const publisher = autoPost ? xPublisher() : null;
   const threshold = cfg.threshold ?? DEFAULT_THRESHOLD;
-  slog("scout_start", { mock, threshold, autoPost });
+  slog("scout_start", { threshold, autoPost });
 
   let found = 0, posted = 0, queued = 0, skipped = 0;
   let costSpent = 0;
@@ -142,7 +141,7 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
 
       const produced = await clipper.produce(d, moment);
       costSpent += produced.costUsd ?? 0;
-      const result = autoPost ? await publisher.publish(produced) : { xPostId: null };
+      const result = autoPost && publisher ? await publisher.publish(produced) : { xPostId: null };
 
       const [clip] = await database.insert(clips).values({
         candidateId: cand.id, startS: moment.startS, endS: moment.endS,
@@ -175,8 +174,8 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
     .set({ finishedAt: new Date(), found, posted, skipped })
     .where(eq(runs.id, run.id));
   await logEvent("run",
-    `Scout done — found ${found}, posted ${posted}, queued ${queued}, skipped ${skipped}${mock ? " (mock)" : ""}`);
+    `Scout done — found ${found}, posted ${posted}, queued ${queued}, skipped ${skipped}`);
 
   slog("scout_done", { found, posted, queued, skipped, costSpent: Number(costSpent.toFixed(2)) });
-  return { runId: run.id, found, posted, queued, skipped, mock };
+  return { runId: run.id, found, posted, queued, skipped };
 }

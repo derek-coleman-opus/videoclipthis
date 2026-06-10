@@ -1,4 +1,3 @@
-import { opusclipRender } from "./opusclip";
 import type { DetectedCandidate, Moment } from "./types";
 
 export const FOOTER = "🤖 found, clipped & posted by an agent · built on OpusClip · fork it";
@@ -24,27 +23,24 @@ export interface ProducedClip {
   clipUrl: string;
   postText: string;
   costUsd: number;
+  durationS: number; // clip length, so the publisher can pick the right X media category
 }
 
 export interface Clipper {
   produce(c: DetectedCandidate, m: Moment): Promise<ProducedClip>;
 }
 
-export const mockClipper: Clipper = {
-  async produce(c, m) {
-    return {
-      clipUrl: `https://mock.clips/${c.videoId}_${Math.round(m.startS)}-${Math.round(m.endS)}.mp4`,
-      postText: composePost(c, m),
-      costUsd: 0.04,
-    };
-  },
-};
-
-export function opusclipClipper(apiKey: string, base: string): Clipper {
+/** The clip is already rendered by OpusClip during selection — here we just compose the
+ *  credit-first post text around it. (Args kept for symmetry / future direct-render needs.) */
+export function opusclipClipper(_apiKey: string, _base: string): Clipper {
   return {
     async produce(c, m) {
-      const r = await opusclipRender(c.url, m.startS, m.endS, apiKey, base);
-      return { clipUrl: r.clipUrl, postText: composePost(c, m), costUsd: r.costUsd };
+      return {
+        clipUrl: m.clipUrl,
+        postText: composePost(c, m),
+        costUsd: m.costUsd,
+        durationS: Math.max(0, Math.round(m.endS - m.startS)),
+      };
     },
   };
 }

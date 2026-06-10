@@ -1,42 +1,52 @@
 import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { db, candidates, clips, events } from "@/lib/db";
-import { isMock } from "./config";
+import { requireXReadEnv } from "./env";
+import { fetchPublicMetrics, didHandleReshare } from "./xread";
 
 export interface FeedbackResult {
   updated: number;
   newReshares: number;
-  mock: boolean;
-}
-
-// TODO-LIVE: fetch real X metrics — GET /2/tweets?ids=...&tweet.fields=public_metrics for views,
-// and detect whether the speaker (candidate.speakerHandle) retweeted/quoted the post.
-async function fetchMetrics(xPostId: string, mock: boolean): Promise<{ views: number; reshared: boolean }> {
-  if (mock) {
-    const seed = xPostId.split("").reduce((a, ch) => a + ch.charCodeAt(0), 0);
-    return { views: 1000 + (seed % 9000) * 5, reshared: seed % 3 === 0 };
-  }
-  return { views: 0, reshared: false };
 }
 
 /** Refresh metrics on posted clips + record new speaker reshares (the credit-first loop's signal). */
 export async function runFeedback(): Promise<FeedbackResult> {
-  const mock = isMock();
+  requireXReadEnv();
   const database = db();
+  // Pull posted clips with their candidate's speaker handle (needed for reshare detection).
   const posted = await database
-    .select()
+    .select({
+      id: clips.id,
+      xPostId: clips.xPostId,
+      resharedBySpeaker: clips.resharedBySpeaker,
+      speakerHandle: candidates.speakerHandle,
+    })
     .from(clips)
+    .innerJoin(candidates, eq(clips.candidateId, candidates.id))
     .where(and(eq(clips.status, "posted"), isNotNull(clips.xPostId)));
+
+  const ids = posted.map((c) => c.xPostId as string);
+  const metrics = await fetchPublicMetrics(ids);
 
   let updated = 0;
   let newReshares = 0;
   for (const c of posted) {
-    const m = await fetchMetrics(c.xPostId as string, mock);
+    const m = metrics.get(c.xPostId as string);
+    if (!m) continue;
     const wasReshared = c.resharedBySpeaker ?? false;
+
+    // Only spend a reshare lookup when it could flip the flag and the post actually has
+    // retweets/quotes to inspect.
+    let reshared = wasReshared;
+    if (!wasReshared && c.speakerHandle && (m.retweets > 0 || m.quotes > 0)) {
+      reshared = await didHandleReshare(c.xPostId as string, c.speakerHandle);
+    }
+
     await database.update(clips)
-      .set({ views: m.views, resharedBySpeaker: m.reshared || wasReshared })
+      .set({ views: m.views, resharedBySpeaker: reshared })
       .where(eq(clips.id, c.id));
     updated++;
-    if (m.reshared && !wasReshared) {
+
+    if (reshared && !wasReshared) {
       newReshares++;
       await database.insert(events).values({
         type: "posted",
@@ -46,7 +56,7 @@ export async function runFeedback(): Promise<FeedbackResult> {
       });
     }
   }
-  return { updated, newReshares, mock };
+  return { updated, newReshares };
 }
 
 /** Feed performance back into ranking: speakers whose clips were reshared earn a small score boost. */

@@ -22,3 +22,15 @@ export async function updateSettings(
     .returning();
   return updated;
 }
+
+/** Persist Summon-poll state (the last processed mention id + cached bot user id). */
+export async function updateSummonState(
+  patch: Partial<{ summonSinceId: string | null; xBotUserId: string | null }>,
+): Promise<void> {
+  const database = db();
+  await getSettings();
+  await database
+    .update(settings)
+    .set({ ...patch, updatedAt: new Date() })
+    .where(eq(settings.id, 1));
+}

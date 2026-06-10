@@ -4,10 +4,12 @@ import { runSummon } from "@/lib/pipeline/summon";
 import { runFeedback } from "@/lib/pipeline/feedback";
 
 export const dynamic = "force-dynamic";
+// Hobby caps functions at 60s; on Vercel Pro raise to 300 — OpusClip render polling needs it.
 export const maxDuration = 60;
 
-// Hobby-friendly: ONE daily cron that runs the whole cycle (scout → summon → feedback).
-// On Pro you can split these back into separate, more frequent crons (see /api/cron/{scout,summon,feedback}).
+// Backstop route that runs the whole cycle (scout → summon → feedback) in one call. Not wired
+// into vercel.json anymore — the split scout/summon/feedback crons run on their own cadence — but
+// kept so the full cycle can still be invoked manually in one request.
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   if (secret) {
