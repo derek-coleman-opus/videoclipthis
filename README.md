@@ -58,9 +58,11 @@ The pipeline is wired to real services; you only need keys and the X account lab
 | `lib/pipeline/publishing.ts` | X v2 post/reply with native video (needs the **Automated** label) |
 | `lib/pipeline/summon.ts` + `feedback.ts` + `xread.ts` | X mention polling + metrics/reshare reads |
 
-> **OpusClip note:** the exact request/response field names for `POST /api/clip-projects` and
-> `GET /api/clips` are read defensively in `opusclip.ts` and marked `TODO-CONFIRM` — verify them
-> against the `api.opus.pro` MCP and tighten once confirmed.
+> **OpusClip note:** the client follows the published contract (`POST /api/clip-projects` →
+> poll `GET /api/exportable-clips?q=findByProjectId`; clip fields `uriForExport`, `score`,
+> `durationMs`, `title`). Two enum values remain to confirm with the API team (marked
+> `TODO-CONFIRM` in `opusclip.ts`): `curationPref.model` ("ClipAnything") and
+> `renderPref.layoutAspectRatio` ("9:16").
 
 ### Access checklist
 | Need | For | Where |
