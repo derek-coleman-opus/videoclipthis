@@ -136,7 +136,12 @@ async function resolveChannelId(c: { name: string; handle?: string }, apiKey: st
 }
 
 /** Watches org channels (WATCHLIST) + every tracked figure's channel for fresh long-form uploads. */
-export function youtubeSource(channels: { name: string; handle?: string }[], apiKey: string, figures: Figure[]): Source {
+export function youtubeSource(
+  channels: { name: string; handle?: string }[],
+  apiKey: string,
+  figures: Figure[],
+  figureSearch: boolean,
+): Source {
   return {
     name: "youtube",
     async discover() {
@@ -157,12 +162,15 @@ export function youtubeSource(channels: { name: string; handle?: string }[], api
       }
       // Also catch videos that FEATURE a tracked figure but were posted by someone else
       // (interviews, talks, reposts) — search YouTube by the figure's name; still credited to them.
-      const cutoffISO = new Date(Date.now() - MAX_AGE_HOURS * 3600 * 1000).toISOString();
-      for (const f of figures) {
-        try {
-          all.push(...(await searchFigureVideos(f, apiKey, cutoffISO)));
-        } catch (e) {
-          console.warn(`youtube figure search "${f.name}" failed: ${(e as Error).message}`);
+      // Quota-gated (100 units per figure per search): only when the caller says it's due.
+      if (figureSearch) {
+        const cutoffISO = new Date(Date.now() - MAX_AGE_HOURS * 3600 * 1000).toISOString();
+        for (const f of figures) {
+          try {
+            all.push(...(await searchFigureVideos(f, apiKey, cutoffISO)));
+          } catch (e) {
+            console.warn(`youtube figure search "${f.name}" failed: ${(e as Error).message}`);
+          }
         }
       }
       // TODO-LIVE: add WebSub/PubSubHubbub push for near-real-time detection (build plan §3.1).
@@ -171,10 +179,12 @@ export function youtubeSource(channels: { name: string; handle?: string }[], api
   };
 }
 
-export function buildSources(figures: Figure[]): Source[] {
+export function buildSources(figures: Figure[], opts?: { figureSearch?: boolean }): Source[] {
   const sources: Source[] = [];
   if (WATCHLIST.youtubeChannels.length) {
-    sources.push(youtubeSource(WATCHLIST.youtubeChannels, process.env.YOUTUBE_API_KEY ?? "", figures));
+    sources.push(youtubeSource(
+      WATCHLIST.youtubeChannels, process.env.YOUTUBE_API_KEY ?? "", figures, opts?.figureSearch ?? true,
+    ));
   }
   // TODO(M-next): podcast (RSS), X signal stream, HN, Reddit sources.
   return sources;

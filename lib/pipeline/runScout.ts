@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db, candidates, clips, events, runs } from "@/lib/db";
-import { getSettings } from "@/lib/settings";
-import { DEFAULT_THRESHOLD, COST_CAP_USD, MAX_CLIPS_PER_RUN } from "./config";
+import { getSettings, updateSummonState } from "@/lib/settings";
+import { DEFAULT_THRESHOLD, COST_CAP_USD, MAX_CLIPS_PER_RUN, FIGURE_SEARCH_INTERVAL_H } from "./config";
 import { requireScoutEnv, requireXEnv } from "./env";
 import { slog } from "./util";
 import { buildSources } from "./sources";
@@ -56,7 +56,12 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   if (autoPost) requireXEnv();
 
   const figures = await getFigures();
-  const sources = buildSources(figures);
+  // Figure searches cost 100 YouTube quota units each — only run them every few hours.
+  const figureSearchDue =
+    !cfg.figureSearchAt ||
+    Date.now() - new Date(cfg.figureSearchAt).getTime() >= FIGURE_SEARCH_INTERVAL_H * 3600 * 1000;
+  const sources = buildSources(figures, { figureSearch: figureSearchDue });
+  if (figureSearchDue) await updateSummonState({ figureSearchAt: new Date() });
   const scorer = claudeScorer(process.env.ANTHROPIC_API_KEY ?? "");
   const selector = opusclipSelector(process.env.OPUSCLIP_API_KEY ?? "", process.env.ANTHROPIC_API_KEY ?? "");
   const clipper = opusclipClipper(process.env.OPUSCLIP_API_KEY ?? "", process.env.OPUSCLIP_API_BASE ?? "");
@@ -75,6 +80,12 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
     } catch (e) {
       await logEvent("error", `${src.name} discover failed: ${(e as Error).message}`);
       continue;
+    }
+    if (detected.length === 0) {
+      // Per-channel/search failures are swallowed inside discover(), so an empty result can
+      // hide quota exhaustion — surface it where the operator will see it.
+      await logEvent("error",
+        `${src.name}: discovery returned 0 videos — possible YouTube quota exhaustion (check Vercel logs for "quotaExceeded")`);
     }
 
     for (const d of detected) {

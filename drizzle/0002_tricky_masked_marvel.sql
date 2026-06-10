@@ -1,0 +1,1 @@
+ALTER TABLE "settings" ADD COLUMN "figure_search_at" timestamp with time zone;
