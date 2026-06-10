@@ -29,6 +29,21 @@ function parseDuration(iso: string): number {
   return Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0);
 }
 
+// CJK, Hangul, Cyrillic, Arabic, Hebrew, Devanagari, Thai — if the title leans on these,
+// the video isn't for our English-speaking audience.
+const NON_LATIN = /[Ѐ-ӿ֐-׿؀-ۿऀ-ॿ฀-๿぀-ヿ㐀-鿿가-힯]/g;
+
+/** English-only gate: trust YouTube's language metadata when present, else require a
+ *  (mostly) Latin-script title. Keeps the account's clips consistently English. */
+function isEnglish(v: any): boolean {
+  const lang = String(v.snippet?.defaultAudioLanguage ?? v.snippet?.defaultLanguage ?? "").toLowerCase();
+  if (lang) return lang.startsWith("en");
+  const title: string = v.snippet?.title ?? "";
+  if (!title) return false;
+  const nonLatin = (title.match(NON_LATIN) ?? []).length;
+  return nonLatin <= title.length * 0.1;
+}
+
 /** Fresh, long-form uploads from one channel (uploads playlist → durations → recency filter). */
 async function recentUploads(channelId: string, apiKey: string): Promise<DetectedCandidate[]> {
   const ch = await ytGet("channels", { part: "contentDetails", id: channelId }, apiKey);
@@ -43,6 +58,7 @@ async function recentUploads(channelId: string, apiKey: string): Promise<Detecte
   for (const v of vids.items ?? []) {
     const dur = parseDuration(v.contentDetails?.duration ?? "PT0S");
     if (dur < LONG_FORM_MIN_S) continue;
+    if (!isEnglish(v)) continue;
     const published = v.snippet?.publishedAt ? new Date(v.snippet.publishedAt) : null;
     if (published && published.getTime() < cutoff) continue;
     out.push({
@@ -67,7 +83,7 @@ async function recentUploads(channelId: string, apiKey: string): Promise<Detecte
 async function searchFigureVideos(figure: Figure, apiKey: string, cutoffISO: string): Promise<DetectedCandidate[]> {
   const s = await ytGet("search", {
     part: "snippet", q: `"${figure.name}"`, type: "video", order: "date",
-    publishedAfter: cutoffISO, maxResults: "5",
+    publishedAfter: cutoffISO, maxResults: "5", relevanceLanguage: "en",
   }, apiKey);
   const ids: string[] = (s.items ?? []).map((it: any) => it.id?.videoId).filter(Boolean);
   if (!ids.length) return [];
@@ -77,6 +93,7 @@ async function searchFigureVideos(figure: Figure, apiKey: string, cutoffISO: str
   for (const v of vids.items ?? []) {
     const dur = parseDuration(v.contentDetails?.duration ?? "PT0S");
     if (dur < LONG_FORM_MIN_S) continue;
+    if (!isEnglish(v)) continue;
     const title: string = v.snippet?.title ?? "";
     if (!title.toLowerCase().includes(lastName)) continue; // light noise filter: name in title
     out.push({

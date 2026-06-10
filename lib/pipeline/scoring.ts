@@ -19,6 +19,8 @@ clip-worthiness for an audience of AI/dev builders, weighting:
 - virality (20): strong claims, quotable lines, a demo, a hot take?
 - freshness (10): recent + window still open?
 - saturation (5, inverse): penalize already-widely-clipped.
+Hard rule: the account posts English clips only — if the video's spoken language or
+transcript is not English, return score 0 regardless of the rubric.
 Return JSON: {"score": <int>, "rationale": "<short>"}.`;
 
 function parseScore(text: string): Scored {
