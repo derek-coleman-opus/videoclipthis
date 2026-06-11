@@ -53,15 +53,50 @@ async function opusFetch(
   );
 }
 
+/** Context that sharpens the curation prompt for a specific video. */
+export interface CurationContext {
+  title?: string;
+  speaker?: string;
+  channel?: string;
+}
+
+/** What we tell ClipAnything to look for. The output is posted as native video on X to an
+ *  audience of AI/dev builders, so we optimize for a scroll-stopping, self-contained moment. */
+export function buildCurationPrompt(ctx: CurationContext = {}): string {
+  const who = ctx.speaker ? ` from ${ctx.speaker}` : "";
+  const what = ctx.title ? ` of "${ctx.title}"` : "";
+  return [
+    `Find the single most engaging AND informative moment${what}${who} for an audience of AI engineers and developers on X (Twitter).`,
+    `Prioritize, in order: (1) a bold or surprising claim, hot take, or strong opinion; (2) a new announcement, release, or number; (3) a live demo moment; (4) a sharp, quotable insight or framework the viewer can apply.`,
+    `The clip must be fully self-contained: it starts at the beginning of a thought and ends at its natural conclusion — never cut mid-sentence and never depend on context the viewer hasn't seen.`,
+    `The first 2-3 seconds must work as a hook for someone scrolling a feed with sound off — a strong opening line, not a slow wind-up.`,
+    `Avoid: intros, speaker introductions, thank-yous, audience Q&A logistics, sponsor reads, and generic high-level summaries.`,
+    `Format for X: vertical 9:16, with accurate burned-in captions (most viewers watch muted), 30-90 seconds long.`,
+  ].join(" ");
+}
+
 /** Submit a long video for clipping; returns the project id (rendering continues server-side). */
-export async function opusclipCreateProject(videoUrl: string, apiKey: string, base: string): Promise<string> {
+export async function opusclipCreateProject(
+  videoUrl: string,
+  apiKey: string,
+  base: string,
+  ctx: CurationContext = {},
+): Promise<string> {
   const data = await opusFetch("POST", "/api/clip-projects", apiKey, base, {
     videoUrl,
     // ClipAnything = the multimodal curation model (vs ClipBasic for plain talking heads).
     // TODO-CONFIRM the exact enum value against the OpenAPI spec; drop `model` for the org default.
-    curationPref: { model: "ClipAnything", clipDurations: [30, 60, 90] },
+    curationPref: {
+      model: "ClipAnything",
+      clipDurations: [30, 60, 90],
+      customPrompt: buildCurationPrompt(ctx),
+    },
     // TODO-CONFIRM the layoutAspectRatio enum (e.g. "9:16" vs a named value).
-    renderPref: { layoutAspectRatio: "9:16" },
+    renderPref: {
+      layoutAspectRatio: "9:16",
+      // Tighter clips read better on X; documented quickstart option.
+      quickstartConfig: { enableRemoveFillerWords: true },
+    },
   });
   const proj = data.data ?? data.project ?? data;
   const id = String(proj?.id ?? proj?.projectId ?? "");

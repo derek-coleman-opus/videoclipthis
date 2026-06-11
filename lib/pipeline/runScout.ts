@@ -141,7 +141,9 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       }
 
       // Submit the render and move on — collectRenders() picks it up on a later run.
-      const projectId = await opusclipCreateProject(d.url, opusKey, opusBase);
+      const projectId = await opusclipCreateProject(d.url, opusKey, opusBase, {
+        title: d.title, speaker: d.speaker || d.figureName, channel: d.channel,
+      });
       await database.update(candidates)
         .set({ status: "rendering", opusProjectId: projectId })
         .where(eq(candidates.id, cand.id));
