@@ -1,14 +1,19 @@
-// OpusClip API client — confirmed against the public API reference
-// (help.opus.pro/api-reference + github.com/opus-pro/opus-skills):
+// OpusClip API client (api.opus.pro) — confirmed against the published API reference:
 //   POST /api/clip-projects                                  → create a project from a video URL
 //   GET  /api/exportable-clips?q=findByProjectId&projectId=… → the project's rendered clips
 // Auth: `Authorization: Bearer <API_KEY>`. Rate limit 30 req/min; max video 10h/30GB; max 50
-// concurrent projects; projects expire in 30 days. Completion is signaled by the exportable-clips
-// array populating with `uriForExport` URLs (no documented stage enum), so we poll with backoff.
+// concurrent projects; projects expire in 30 days.
+//
+// Rendering takes minutes — far longer than a serverless function budget — so this client is
+// deliberately TWO-PHASE with no internal polling: `opusclipCreateProject` submits and returns
+// the project id immediately; `opusclipFetchClips` is a single cheap status check. The pipeline
+// persists the project id on the candidate (status "rendering") and collects finished renders
+// on subsequent runs (lib/pipeline/render.ts).
+//
 // Billing is credit-based (GET /api/api-usage?q=mine) — no per-clip USD, so costUsd stays 0 and
 // volume control lives in MAX_CLIPS_PER_RUN.
 
-import { sleep, slog, withRetry } from "./util";
+import { withRetry } from "./util";
 
 export interface OpusClipResult {
   startS: number;
@@ -17,12 +22,10 @@ export interface OpusClipResult {
   caption: string; // clip title (used as the hook)
   clipUrl: string; // rendered clip export URL (MP4)
   costUsd: number; // credit-based billing — always 0 here
+  renderPending: boolean;
 }
 
 const DEFAULT_BASE = "https://api.opus.pro";
-const POLL_TIMEOUT_MS = 15 * 60 * 1000; // long videos can take a while to curate + render
-const POLL_START_MS = 5000;
-const POLL_MAX_MS = 30000;
 
 async function opusFetch(
   method: "GET" | "POST",
@@ -50,12 +53,12 @@ async function opusFetch(
   );
 }
 
-/** Create a clip project for a long video and return its project id. */
-async function createProject(videoUrl: string, apiKey: string, base: string): Promise<string> {
+/** Submit a long video for clipping; returns the project id (rendering continues server-side). */
+export async function opusclipCreateProject(videoUrl: string, apiKey: string, base: string): Promise<string> {
   const data = await opusFetch("POST", "/api/clip-projects", apiKey, base, {
     videoUrl,
     // ClipAnything = the multimodal curation model (vs ClipBasic for plain talking heads).
-    // TODO-CONFIRM the exact enum value with the API team; drop `model` to use the org default.
+    // TODO-CONFIRM the exact enum value against the OpenAPI spec; drop `model` for the org default.
     curationPref: { model: "ClipAnything", clipDurations: [30, 60, 90] },
     // TODO-CONFIRM the layoutAspectRatio enum (e.g. "9:16" vs a named value).
     renderPref: { layoutAspectRatio: "9:16" },
@@ -71,7 +74,7 @@ function asArray(data: any): any[] {
   return data?.data?.list ?? (Array.isArray(data?.data) ? data.data : null) ?? data?.clips ?? data?.list ?? [];
 }
 
-function normalizeClip(c: any): OpusClipResult & { renderPending: boolean } {
+function normalizeClip(c: any): OpusClipResult {
   const durationS = c.durationMs != null ? Number(c.durationMs) / 1000 : Number(c.duration_sec ?? c.durationSec ?? 0);
   const startS = c.startMs != null ? Number(c.startMs) / 1000 : Number(c.start_sec ?? c.startSec ?? 0);
   return {
@@ -85,40 +88,20 @@ function normalizeClip(c: any): OpusClipResult & { renderPending: boolean } {
   };
 }
 
-/** Fetch a project's exportable clips (may be empty/partial while curation+render is in flight). */
-async function listClips(projectId: string, apiKey: string, base: string): Promise<ReturnType<typeof normalizeClip>[]> {
+/** One status check on a project's exportable clips (may be empty/partial mid-render).
+ *  `done` = at least one clip exists and every returned clip has finished rendering. */
+export async function opusclipFetchClips(
+  projectId: string,
+  apiKey: string,
+  base: string,
+): Promise<{ clips: OpusClipResult[]; done: boolean }> {
   const data = await opusFetch(
     "GET",
     `/api/exportable-clips?q=findByProjectId&projectId=${encodeURIComponent(projectId)}`,
     apiKey,
     base,
   );
-  return asArray(data).map(normalizeClip);
-}
-
-/**
- * Create a project and poll exportable-clips until rendered; returns clips with a usable export
- * URL ranked by virality score (best first). On timeout, returns whatever is ready, else throws
- * so the caller marks the candidate failed.
- */
-export async function opusclipClips(videoUrl: string, apiKey: string, base: string): Promise<OpusClipResult[]> {
-  const projectId = await createProject(videoUrl, apiKey, base);
-  slog("opusclip_project", { projectId, videoUrl });
-
-  const deadline = Date.now() + POLL_TIMEOUT_MS;
-  let delay = POLL_START_MS;
-  let ready: OpusClipResult[] = [];
-  while (Date.now() < deadline) {
-    const clips = await listClips(projectId, apiKey, base);
-    ready = clips
-      .filter((c) => c.clipUrl && !c.renderPending)
-      .sort((a, b) => b.score - a.score)
-      .map(({ renderPending: _r, ...c }) => c);
-    // Done when every returned clip has finished rendering (and there is at least one).
-    if (clips.length > 0 && ready.length === clips.length) return ready;
-    await sleep(delay);
-    delay = Math.min(delay * 1.5, POLL_MAX_MS);
-  }
-  if (ready.length) return ready; // partial render at timeout — use what's done
-  throw new Error(`OpusClip project ${projectId} produced no exportable clips before timeout`);
+  const clips = asArray(data).map(normalizeClip);
+  const done = clips.length > 0 && clips.every((c) => c.clipUrl && !c.renderPending);
+  return { clips, done };
 }

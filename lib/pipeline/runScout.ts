@@ -1,41 +1,36 @@
 import { eq } from "drizzle-orm";
-import { db, candidates, clips, events, runs } from "@/lib/db";
+import { db, candidates, runs } from "@/lib/db";
 import { getSettings, updateSummonState } from "@/lib/settings";
-import { DEFAULT_THRESHOLD, COST_CAP_USD, MAX_CLIPS_PER_RUN, FIGURE_SEARCH_INTERVAL_H } from "./config";
-import { requireScoutEnv, requireXEnv } from "./env";
+import { DEFAULT_THRESHOLD, MAX_CLIPS_PER_RUN, FIGURE_SEARCH_INTERVAL_H } from "./config";
+import { requireScoutEnv } from "./env";
 import { slog } from "./util";
 import { buildSources } from "./sources";
 import { claudeScorer } from "./scoring";
-import { opusclipSelector } from "./selection";
-import { opusclipClipper, needsCreditResolution } from "./production";
-import { xPublisher } from "./publishing";
+import { opusclipCreateProject } from "./opusclip";
+import { needsCreditResolution } from "./production";
+import { collectRenders } from "./render";
 import { matchFigure } from "./figures";
 import { reshareBoost } from "./feedback";
+import { logEvent } from "./events";
 import { getFigures } from "@/lib/figures-store";
+
+export { logEvent } from "./events";
 
 export interface ScoutResult {
   runId: number;
   found: number;
-  posted: number;
-  queued: number;
+  rendering: number;
+  collected: number;
   skipped: number;
   paused?: boolean;
 }
 
-/** Append a row to the activity feed. */
-export async function logEvent(
-  type: string, message: string, refTable?: string, refId?: number,
-): Promise<void> {
-  await db().insert(events).values({
-    type, message, refTable: refTable ?? null, refId: refId ?? null,
-  });
-}
-
 /**
- * The Scout pipeline: ingest -> score (gate) -> credit-check -> select -> produce -> publish,
- * persisting every step. Auto-publishes to X only when autonomy === "auto"; otherwise clips
- * are queued for review (pending_review) and shown in the admin. No mock fallback — a run
- * aborts up front if the required external-service keys are missing.
+ * The Scout pipeline, two-phase so no request ever waits on a render:
+ *   Phase B (first): collectRenders() — finished OpusClip renders become clips
+ *     (pending_review, auto-posted, or summon replies).
+ *   Phase A: ingest -> score (gate) -> credit-check -> SUBMIT render (status "rendering").
+ * Persists every step. No mock fallback — a run aborts up front if required keys are missing.
  */
 export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult> {
   requireScoutEnv();
@@ -49,11 +44,11 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       .set({ finishedAt: new Date(), errors: "paused" })
       .where(eq(runs.id, run.id));
     await logEvent("run", "Scout skipped — paused");
-    return { runId: run.id, found: 0, posted: 0, queued: 0, skipped: 0, paused: true };
+    return { runId: run.id, found: 0, rendering: 0, collected: 0, skipped: 0, paused: true };
   }
 
-  const autoPost = cfg.autonomy === "auto";
-  if (autoPost) requireXEnv();
+  // Phase B first: collect any renders that finished since the last run (clips queue/post here).
+  const collect = await collectRenders();
 
   const figures = await getFigures();
   // Figure searches cost 100 YouTube quota units each — only run them every few hours.
@@ -63,14 +58,12 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   const sources = buildSources(figures, { figureSearch: figureSearchDue });
   if (figureSearchDue) await updateSummonState({ figureSearchAt: new Date() });
   const scorer = claudeScorer(process.env.ANTHROPIC_API_KEY ?? "");
-  const selector = opusclipSelector(process.env.OPUSCLIP_API_KEY ?? "", process.env.ANTHROPIC_API_KEY ?? "");
-  const clipper = opusclipClipper(process.env.OPUSCLIP_API_KEY ?? "", process.env.OPUSCLIP_API_BASE ?? "");
-  const publisher = autoPost ? xPublisher() : null;
+  const opusKey = process.env.OPUSCLIP_API_KEY ?? "";
+  const opusBase = process.env.OPUSCLIP_API_BASE ?? "";
   const threshold = cfg.threshold ?? DEFAULT_THRESHOLD;
-  slog("scout_start", { threshold, autoPost });
+  slog("scout_start", { threshold, collected: collect.collected });
 
-  let found = 0, posted = 0, queued = 0, skipped = 0;
-  let costSpent = 0;
+  let found = 0, rendering = 0, skipped = 0;
   let capped = false;
 
   for (const src of sources) {
@@ -140,39 +133,20 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
         skipped++; continue;
       }
 
-      const moment = await selector.select(d);
-      if (!moment) { skipped++; continue; }
-
-      // Hardening: per-run cost + volume caps.
-      if (costSpent >= COST_CAP_USD || posted + queued >= MAX_CLIPS_PER_RUN) {
-        await logEvent("run", `Cap reached ($${costSpent.toFixed(2)} / ${posted + queued} clips) — stopping run early.`);
+      // Volume cap on new render submissions per run.
+      if (rendering >= MAX_CLIPS_PER_RUN) {
+        await logEvent("run", `Cap reached (${rendering} renders submitted) — stopping run early.`);
         capped = true;
         break;
       }
 
-      const produced = await clipper.produce(d, moment);
-      costSpent += produced.costUsd ?? 0;
-      const result = autoPost && publisher ? await publisher.publish(produced) : { xPostId: null };
-
-      const [clip] = await database.insert(clips).values({
-        candidateId: cand.id, startS: moment.startS, endS: moment.endS,
-        hookCaption: moment.hookCaption, postText: produced.postText, clipUrl: produced.clipUrl,
-        kind: "scout", status: autoPost ? "posted" : "pending_review",
-        xPostId: result.xPostId, costUsd: produced.costUsd,
-        postedAt: autoPost ? new Date() : null,
-      }).returning();
-
+      // Submit the render and move on — collectRenders() picks it up on a later run.
+      const projectId = await opusclipCreateProject(d.url, opusKey, opusBase);
       await database.update(candidates)
-        .set({ status: autoPost ? "posted" : "selected" })
+        .set({ status: "rendering", opusProjectId: projectId })
         .where(eq(candidates.id, cand.id));
-
-      if (autoPost) {
-        posted++;
-        await logEvent("posted", `Posted: ${d.title}`, "clips", clip.id);
-      } else {
-        queued++;
-        await logEvent("scored", `Queued for review [${score}]: ${d.title}`, "clips", clip.id);
-      }
+      rendering++;
+      await logEvent("rendering", `Rendering [${score}]: ${d.title} (OpusClip ${projectId})`, "candidates", cand.id);
       } catch (e) {
         await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, cand.id));
         await logEvent("error", `Failed on "${d.title}": ${(e as Error).message}`, "candidates", cand.id);
@@ -182,11 +156,11 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   }
 
   await database.update(runs)
-    .set({ finishedAt: new Date(), found, posted, skipped })
+    .set({ finishedAt: new Date(), found, posted: collect.collected, skipped })
     .where(eq(runs.id, run.id));
   await logEvent("run",
-    `Scout done — found ${found}, posted ${posted}, queued ${queued}, skipped ${skipped}`);
+    `Scout done — found ${found}, rendering ${rendering}, clips collected ${collect.collected}, skipped ${skipped}`);
 
-  slog("scout_done", { found, posted, queued, skipped, costSpent: Number(costSpent.toFixed(2)) });
-  return { runId: run.id, found, posted, queued, skipped };
+  slog("scout_done", { found, rendering, collected: collect.collected, skipped });
+  return { runId: run.id, found, rendering, collected: collect.collected, skipped };
 }

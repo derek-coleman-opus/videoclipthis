@@ -1,31 +1,34 @@
 import { eq } from "drizzle-orm";
-import { db, candidates, clips, summonRequests } from "@/lib/db";
+import { db, candidates, summonRequests } from "@/lib/db";
 import { requireScoutEnv, requireXEnv, requireXReadEnv } from "./env";
 import { getSettings, updateSummonState } from "@/lib/settings";
-import { opusclipSelector } from "./selection";
-import { opusclipClipper } from "./production";
-import { xPublisher } from "./publishing";
-import { logEvent } from "./runScout";
+import { opusclipCreateProject } from "./opusclip";
+import { collectRenders } from "./render";
+import { logEvent } from "./events";
 import { fetchMentions, getBotUserId } from "./xread";
-import type { DetectedCandidate } from "./types";
 
 export interface SummonResult {
   processed: number;
+  collected: number;
 }
 
-// Never fire off more than this many summon replies in a single poll — guards against a
+// Never start more than this many summon renders in a single poll — guards against a
 // thundering herd of mentions (and the X policy "don't be spammy" line).
 const MAX_REPLIES_PER_RUN = 5;
 
-/** Reactive mode: clip whatever a user tags @videoclipthis under, and reply in-thread. */
+/** Reactive mode: clip whatever a user tags @videoclipthis under, and reply in-thread.
+ *  Two-phase like Scout: this submits the render and exits; collectRenders() (run here and at
+ *  the top of every scout cycle) posts the reply once the clip is ready. */
 export async function runSummon(): Promise<SummonResult> {
   requireScoutEnv();
   requireXEnv();
   requireXReadEnv();
   const database = db();
-  const selector = opusclipSelector(process.env.OPUSCLIP_API_KEY ?? "", process.env.ANTHROPIC_API_KEY ?? "");
-  const clipper = opusclipClipper(process.env.OPUSCLIP_API_KEY ?? "", process.env.OPUSCLIP_API_BASE ?? "");
-  const publisher = xPublisher();
+  const opusKey = process.env.OPUSCLIP_API_KEY ?? "";
+  const opusBase = process.env.OPUSCLIP_API_BASE ?? "";
+
+  // Collect first so finished renders (scout or summon) go out on the 5-min cadence.
+  const collect = await collectRenders();
 
   // Resolve + cache the bot's own user id, then poll mentions since the last processed one.
   const cfg = await getSettings();
@@ -54,41 +57,32 @@ export async function runSummon(): Promise<SummonResult> {
       .limit(1);
     if (seen.length) continue;
 
-    const d: DetectedCandidate = {
-      source: "summon", url: m.targetUrl, videoId: m.targetUrl,
-      title: `Summoned by @${m.requester}`,
-    };
     const [cand] = await database.insert(candidates).values({
-      source: "summon", url: d.url, videoId: d.videoId, title: d.title, status: "selected",
+      source: "summon", url: m.targetUrl, videoId: m.targetUrl,
+      title: `Summoned by @${m.requester}`, speaker: m.requester, status: "found",
     }).returning();
     const [req] = await database.insert(summonRequests).values({
       tweetId: m.tweetId, requester: m.requester, targetUrl: m.targetUrl,
       status: "received", candidateId: cand.id,
     }).returning();
 
-    // A human asked, so we skip the relevance gate (build plan §7).
-    const moment = await selector.select(d);
-    if (!moment) {
+    // A human asked, so we skip the relevance gate: straight to render submission.
+    try {
+      const projectId = await opusclipCreateProject(m.targetUrl, opusKey, opusBase);
+      await database.update(candidates)
+        .set({ status: "rendering", opusProjectId: projectId })
+        .where(eq(candidates.id, cand.id));
+      await database.update(summonRequests).set({ status: "clipped" }).where(eq(summonRequests.id, req.id));
+      await logEvent("rendering", `Summon: rendering a clip of ${m.targetUrl} for @${m.requester}`, "summon_requests", req.id);
+      processed++;
+    } catch (e) {
+      await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, cand.id));
       await database.update(summonRequests).set({ status: "failed" }).where(eq(summonRequests.id, req.id));
-      continue;
+      await logEvent("error", `Summon render failed for @${m.requester}: ${(e as Error).message}`, "summon_requests", req.id);
     }
-    const produced = await clipper.produce(d, moment);
-    const result = await publisher.publish(produced, m.tweetId);
-
-    await database.insert(clips).values({
-      candidateId: cand.id, startS: moment.startS, endS: moment.endS, hookCaption: moment.hookCaption,
-      postText: produced.postText, clipUrl: produced.clipUrl, kind: "summon",
-      status: "posted", xPostId: result.xPostId, replyTo: m.tweetId,
-      costUsd: produced.costUsd, postedAt: new Date(),
-    });
-    await database.update(summonRequests)
-      .set({ status: "replied" })
-      .where(eq(summonRequests.id, req.id));
-    await logEvent("replied", `Summon: replied to @${m.requester} with a clip of ${m.targetUrl}`, "summon_requests", req.id);
-    processed++;
   }
 
   // Advance the poll cursor so the next run only sees newer mentions.
   if (cursor && cursor !== cfg.summonSinceId) await updateSummonState({ summonSinceId: cursor });
-  return { processed };
+  return { processed, collected: collect.collected };
 }
