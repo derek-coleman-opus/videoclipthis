@@ -20,7 +20,8 @@ export const candidates = pgTable("candidates", {
   detectedAt: ts("detected_at").defaultNow(),        // starts the first-to-clip clock
   signalStrength: real("signal_strength").default(0),
   figureName: text("figure_name"),                   // matched tracked AI figure, if any
-  status: text("status").notNull().default("found"), // found|scored|held|skipped|selected|posted|failed
+  opusProjectId: text("opus_project_id"),            // OpusClip project rendering this candidate's clips
+  status: text("status").notNull().default("found"), // found|scored|held|skipped|rendering|selected|posted|failed
   score: integer("score"),
   rationale: text("rationale").default(""),
   createdAt: ts("created_at").defaultNow(),

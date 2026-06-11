@@ -26,21 +26,3 @@ export interface ProducedClip {
   durationS: number; // clip length, so the publisher can pick the right X media category
 }
 
-export interface Clipper {
-  produce(c: DetectedCandidate, m: Moment): Promise<ProducedClip>;
-}
-
-/** The clip is already rendered by OpusClip during selection — here we just compose the
- *  credit-first post text around it. (Args kept for symmetry / future direct-render needs.) */
-export function opusclipClipper(_apiKey: string, _base: string): Clipper {
-  return {
-    async produce(c, m) {
-      return {
-        clipUrl: m.clipUrl,
-        postText: composePost(c, m),
-        costUsd: m.costUsd,
-        durationS: Math.max(0, Math.round(m.endS - m.startS)),
-      };
-    },
-  };
-}
