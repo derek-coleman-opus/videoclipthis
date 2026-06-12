@@ -1,24 +1,79 @@
 import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { db, xbotActions, xbotDrafts, type XbotSettings, type XbotTarget } from "@/lib/db";
-import { BANNED_PHRASES, DUPLICATE_LOOKBACK, DUPLICATE_SIMILARITY, LOW_VALUE_PHRASES } from "./config";
+import {
+  BANNED_PHRASES, DUPLICATE_LOOKBACK, DUPLICATE_SIMILARITY, LOW_VALUE_PHRASES, MIN_GAP_MINUTES,
+} from "./config";
 
 /** Anti-spam guardrails. Every check reads the database, not in-memory state, because
  *  serverless invocations share nothing — the xbot_actions ledger is the source of truth. */
+
+/** Count ledger actions of a kind since an arbitrary time. */
+export async function countActionsSince(kind: string, since: Date): Promise<number> {
+  const rows = await db()
+    .select({ id: xbotActions.id })
+    .from(xbotActions)
+    .where(and(eq(xbotActions.kind, kind), gte(xbotActions.createdAt, since)));
+  return rows.length;
+}
 
 /** Count ledger actions of a kind since UTC midnight (the daily-cap window). */
 export async function countActionsToday(kind: string): Promise<number> {
   const dayStart = new Date();
   dayStart.setUTCHours(0, 0, 0, 0);
-  const rows = await db()
-    .select({ id: xbotActions.id })
-    .from(xbotActions)
-    .where(and(eq(xbotActions.kind, kind), gte(xbotActions.createdAt, dayStart)));
-  return rows.length;
+  return countActionsSince(kind, dayStart);
 }
 
 /** True if another action of this kind fits under its daily cap. */
 export async function underCap(kind: string, cap: number): Promise<boolean> {
   return (await countActionsToday(kind)) < cap;
+}
+
+/** Hours per day outside quiet hours — the window daily caps are spread across. */
+export function activeHoursPerDay(s: XbotSettings): number {
+  const quietLen = (s.quietEndUtc - s.quietStartUtc + 24) % 24;
+  return Math.max(1, 24 - quietLen);
+}
+
+/** The daily cap spread evenly across the active window, so the bot can never burn
+ *  a whole day's budget in one burst — burst automation is what X's rules target. */
+export function hourlyCap(dailyCap: number, s: XbotSettings): number {
+  return Math.max(1, Math.ceil(dailyCap / activeHoursPerDay(s)));
+}
+
+/** When the most recent action of a kind happened, or null if there's never been one. */
+export async function lastActionAt(kind: string): Promise<Date | null> {
+  const rows = await db()
+    .select({ createdAt: xbotActions.createdAt })
+    .from(xbotActions)
+    .where(eq(xbotActions.kind, kind))
+    .orderBy(desc(xbotActions.createdAt))
+    .limit(1);
+  return rows[0]?.createdAt ?? null;
+}
+
+/** X automation-rules pacing on top of the daily caps: enforce the derived hourly cap
+ *  and the per-kind minimum gap between consecutive actions. Returns a human-readable
+ *  reason to wait, or null when the action may proceed now. */
+export async function pacingViolation(
+  kind: string,
+  dailyCap: number,
+  s: XbotSettings,
+  now = new Date(),
+): Promise<string | null> {
+  const capPerHour = hourlyCap(dailyCap, s);
+  const pastHour = await countActionsSince(kind, new Date(now.getTime() - 60 * 60 * 1000));
+  if (pastHour >= capPerHour) {
+    return `hourly ${kind} cap (${capPerHour}) reached — the daily cap is spread across active hours per X automation rules; retry within the hour`;
+  }
+  const gapMin = MIN_GAP_MINUTES[kind] ?? 2;
+  const last = await lastActionAt(kind);
+  if (last) {
+    const waitMs = gapMin * 60 * 1000 - (now.getTime() - last.getTime());
+    if (waitMs > 0) {
+      return `pacing gap: last ${kind} was under ${gapMin} min ago — retry in ~${Math.ceil(waitMs / 60000)} min`;
+    }
+  }
+  return null;
 }
 
 /** Engagement pauses during quiet hours (UTC); handles windows that wrap midnight. */

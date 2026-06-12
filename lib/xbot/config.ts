@@ -44,6 +44,17 @@ export const BANNED_PHRASES = [
 /** Hard ceiling for any single draft (X limit is 280; leave headroom). */
 export const MAX_DRAFT_CHARS = 270;
 
+/** X automation-rules pacing: daily caps alone allow bursts (e.g. 20 replies in 10
+ *  minutes), which is exactly the pattern X's anti-spam systems look for. Posting is
+ *  therefore also held to (a) an hourly cap — the daily cap spread evenly across the
+ *  non-quiet window — and (b) a minimum gap between consecutive actions of a kind. */
+export const MIN_GAP_MINUTES: Record<string, number> = {
+  reply: 5,    // outbound growth replies
+  engage: 3,   // engage-backs in our own threads
+  post: 30,    // original posts
+  like: 2,     // Phase 2 auto-likes
+};
+
 /** How many recent posted drafts to compare against for duplicate-text detection. */
 export const DUPLICATE_LOOKBACK = 50;
 
