@@ -15,7 +15,8 @@ export interface PostOutcome {
  *  Throws (and marks the draft failed) on any X error so the dashboard shows it loudly. */
 export async function postDraft(draft: XbotDraft): Promise<PostOutcome> {
   const settings = await getXbotSettings();
-  const isReply = draft.kind === "reply" || draft.kind === "followup";
+  // "plug" is a self-reply under our own traction post — mechanically a reply.
+  const isReply = draft.kind === "reply" || draft.kind === "followup" || draft.kind === "plug";
   const capKind = isReply ? "reply" : "post";
   const cap = isReply ? settings.dailyReplyCap : settings.dailyPostCap;
   if (!(await underCap(capKind, cap))) {
@@ -27,6 +28,9 @@ export async function postDraft(draft: XbotDraft): Promise<PostOutcome> {
     const client = await xbotRw();
     const payload: Record<string, unknown> = { text: draft.text };
     if (draft.inReplyToTweetId) payload.reply = { in_reply_to_tweet_id: draft.inReplyToTweetId };
+    // Small-account reach hack: post originals into one big niche community instead of
+    // the void. Replies always go to the thread, never the community.
+    if (!isReply && settings.communityId) payload.community_id = settings.communityId;
     const res = await client.v2.tweet(payload as any).catch((e) => { throw describeXbotError(e); });
     const xPostId = res.data.id;
 

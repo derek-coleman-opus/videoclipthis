@@ -28,6 +28,10 @@ export type XbotSettingsPatch = Partial<{
   maxFollowers: number;
   keywords: string;
   voiceNotes: string;
+  mission: string;
+  productUrl: string;
+  communityId: string;
+  setupChecklist: string;
   searchSinceId: string | null;
   xbotUserId: string | null;
 }>;
@@ -50,4 +54,13 @@ export function parseKeywords(s: XbotSettings): string[] {
     if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
   } catch { /* fall through */ }
   return DEFAULT_KEYWORDS;
+}
+
+/** Parse the playbook setup-checklist column (JSON array of completed item ids). */
+export function parseSetupChecklist(s: XbotSettings): string[] {
+  try {
+    const arr = JSON.parse(s.setupChecklist ?? "[]");
+    if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
+  } catch { /* fall through */ }
+  return [];
 }

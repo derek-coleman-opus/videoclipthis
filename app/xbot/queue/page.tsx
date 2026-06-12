@@ -29,6 +29,7 @@ export default async function XbotQueuePage() {
               rationale: draft.rationale ?? "",
               inReplyToTweetId: draft.inReplyToTweetId,
               authorHandle: tweet?.authorHandle ?? null,
+              mediaIdea: draft.mediaIdea,
             }}
           />
         ))}

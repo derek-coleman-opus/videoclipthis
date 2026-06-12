@@ -64,7 +64,9 @@ export default function XbotGenerate() {
         </button>
       </div>
       <p className="mt-2 text-xs text-neutral-500">
-        Reply drafts react to the pasted tweet; post drafts open with a number or a take, sourced from your voice notes (XBot Settings).
+        Reply drafts react to the pasted tweet (funny, contrarian, or value-adding — never generic praise);
+        post drafts open with a number or a take, document your mission, and come with a media suggestion.
+        Both source from your voice notes + mission (XBot Settings).
       </p>
       {err && <p className="mt-1 text-xs text-red-400">{err}</p>}
     </div>

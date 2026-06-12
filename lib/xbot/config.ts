@@ -22,6 +22,25 @@ export const BIO_BUILDER_KEYWORDS = [
 /** Discovery prefilter: ignore accounts below this floor (eggs/brand-new spam). */
 export const MIN_FOLLOWERS = 50;
 
+/** Method: keep a roster of 40-50 niche creators you engage with regularly. */
+export const TARGET_ROSTER_GOAL = 40;
+
+/** Generic-praise phrases: a reply that is mostly these adds no value and trains
+ *  followers (and the algorithm) to ignore the account. */
+export const LOW_VALUE_PHRASES = [
+  "good post", "great post", "nice post", "great thread", "good thread",
+  "well said", "so true", "this is the way", "love this", "love it",
+  "best of luck", "good luck", "congrats", "congratulations",
+  "awesome", "amazing", "interesting", "totally agree", "thanks for sharing",
+  "keep it up", "keep going", "keep shipping", "facts",
+];
+
+/** Follower-bait phrasings that get follows who never engage again — banned everywhere. */
+export const BANNED_PHRASES = [
+  "let's connect", "lets connect", "follow me", "follow back",
+  "check out my profile", "dm me", "link in bio",
+];
+
 /** Hard ceiling for any single draft (X limit is 280; leave headroom). */
 export const MAX_DRAFT_CHARS = 270;
 

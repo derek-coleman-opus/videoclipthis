@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { and, desc, eq, gte, like } from "drizzle-orm";
 import { db, events, xbotActions, xbotDrafts, xbotTargets } from "@/lib/db";
-import { getXbotSettings } from "@/lib/xbot/settings";
+import { getXbotSettings, parseSetupChecklist } from "@/lib/xbot/settings";
 import { hasXbotWriteEnv } from "@/lib/xbot/env";
+import { TARGET_ROSTER_GOAL } from "@/lib/xbot/config";
+import { SETUP_ITEMS } from "@/lib/xbot/playbook";
 
 export const dynamic = "force-dynamic";
 
@@ -13,14 +15,14 @@ export default async function XbotPage() {
   } catch (e) {
     return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
   }
-  const { settings, today, pending, targetCount, engagedBack, feed, hasCreds } = data;
+  const { settings, today, pending, targetCount, engagedBack, feed, hasCreds, setupDone } = data;
 
   const stats: Array<[string, string]> = [
     ["Replies today", `${today.reply} / ${settings.dailyReplyCap}`],
     ["Likes today", `${today.like} / ${settings.dailyLikeCap}`],
     ["Posts today", `${today.post} / ${settings.dailyPostCap}`],
     ["Pending review", String(pending)],
-    ["Targets", String(targetCount)],
+    ["Target roster", `${targetCount} / ${TARGET_ROSTER_GOAL}+`],
     ["Engaged back", String(engagedBack)],
   ];
 
@@ -29,6 +31,11 @@ export default async function XbotPage() {
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-sm font-medium text-neutral-400">XBot — personal account growth</h2>
         <div className="flex gap-3 text-xs">
+          {setupDone < SETUP_ITEMS.length && (
+            <Link href="/xbot/playbook" className="rounded bg-amber-900/50 px-2 py-1 text-amber-300 hover:underline">
+              setup {setupDone}/{SETUP_ITEMS.length} — finish the playbook checklist
+            </Link>
+          )}
           {settings.paused && <span className="rounded bg-amber-900/50 px-2 py-1 text-amber-300">paused</span>}
           {!hasCreds && (
             <span className="rounded bg-neutral-800 px-2 py-1 text-neutral-400" title="Set XBOT_* env vars to enable posting">
@@ -53,6 +60,9 @@ export default async function XbotPage() {
         </Link>
         <Link href="/xbot/targets" className="rounded-md border border-neutral-600 px-3 py-1.5 text-neutral-200 hover:bg-neutral-800">
           Manage targets
+        </Link>
+        <Link href="/xbot/playbook" className="rounded-md border border-neutral-600 px-3 py-1.5 text-neutral-200 hover:bg-neutral-800">
+          Playbook
         </Link>
       </div>
 
@@ -105,5 +115,9 @@ async function load() {
     .orderBy(desc(events.createdAt))
     .limit(30);
 
-  return { settings, today, pending, targetCount, engagedBack, feed, hasCreds: hasXbotWriteEnv() };
+  return {
+    settings, today, pending, targetCount, engagedBack, feed,
+    hasCreds: hasXbotWriteEnv(),
+    setupDone: parseSetupChecklist(settings).filter((id) => SETUP_ITEMS.some((i) => i.id === id)).length,
+  };
 }

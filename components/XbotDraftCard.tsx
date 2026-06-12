@@ -11,6 +11,7 @@ type Draft = {
   rationale: string;
   inReplyToTweetId: string | null;
   authorHandle?: string | null;
+  mediaIdea?: string | null;
 };
 
 const MAX_CHARS = 270;
@@ -72,6 +73,11 @@ export default function XbotDraftCard({ draft }: { draft: Draft }) {
         rows={3}
         className="w-full rounded bg-neutral-800 p-2 text-sm"
       />
+      {draft.mediaIdea && (
+        <p className="mt-1 text-xs text-amber-300">
+          📸 Attach media when posting (text-only underperforms): {draft.mediaIdea}
+        </p>
+      )}
       <div className="mt-1 flex items-center justify-between">
         <span className={`text-xs ${over ? "text-red-400" : "text-neutral-500"}`}>
           {text.length}/{MAX_CHARS}

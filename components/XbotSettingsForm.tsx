@@ -17,6 +17,9 @@ type Initial = {
   maxFollowers: number;
   keywords: string;     // JSON array string
   voiceNotes: string;
+  mission: string;
+  productUrl: string;
+  communityId: string;
 };
 
 export default function XbotSettingsForm({ initial }: { initial: Initial }) {
@@ -99,7 +102,7 @@ export default function XbotSettingsForm({ initial }: { initial: Initial }) {
         <input type="number" min={0} className={num} value={form.dailyLikeCap} onChange={(e) => set("dailyLikeCap", Number(e.target.value))} />
       </label>
       <label className={row}>
-        <span>Daily post cap</span>
+        <span>Daily post cap <span className="text-xs text-neutral-500">(method: 3–5)</span></span>
         <input type="number" min={0} className={num} value={form.dailyPostCap} onChange={(e) => set("dailyPostCap", Number(e.target.value))} />
       </label>
       <label className={row}>
@@ -107,15 +110,40 @@ export default function XbotSettingsForm({ initial }: { initial: Initial }) {
         <input type="number" min={0} className={num} value={form.cooldownDays} onChange={(e) => set("cooldownDays", Number(e.target.value))} />
       </label>
       <label className={row}>
-        <span>Quiet hours UTC (start–end)</span>
+        <span>Quiet hours UTC (start–end) <span className="text-xs text-neutral-500">(22–14 ⇒ engage 9am–5pm EST)</span></span>
         <span className="flex gap-1">
           <input type="number" min={0} max={23} className={num} value={form.quietStartUtc} onChange={(e) => set("quietStartUtc", Number(e.target.value))} />
           <input type="number" min={0} max={23} className={num} value={form.quietEndUtc} onChange={(e) => set("quietEndUtc", Number(e.target.value))} />
         </span>
       </label>
       <label className={row}>
-        <span>Max followers for targets</span>
+        <span>Max followers for targets <span className="text-xs text-neutral-500">(method: &lt;5000)</span></span>
         <input type="number" min={0} className="w-28 rounded bg-neutral-800 px-2 py-1 text-right" value={form.maxFollowers} onChange={(e) => set("maxFollowers", Number(e.target.value))} />
+      </label>
+
+      <label className="block">
+        <span className="mb-1 block">Mission <span className="text-xs text-neutral-500">(the public storyline every post documents — makes people remember you)</span></span>
+        <input
+          type="text" value={form.mission} onChange={(e) => set("mission", e.target.value)}
+          className="w-full rounded bg-neutral-800 px-2 py-1 text-sm"
+          placeholder="e.g. growing videoclipthis from 0 → $1k MRR in public"
+        />
+      </label>
+      <label className="block">
+        <span className="mb-1 block">Product URL <span className="text-xs text-neutral-500">(linked in plug replies when a post gets traction)</span></span>
+        <input
+          type="text" value={form.productUrl} onChange={(e) => set("productUrl", e.target.value)}
+          className="w-full rounded bg-neutral-800 px-2 py-1 text-sm"
+          placeholder="https://…"
+        />
+      </label>
+      <label className="block">
+        <span className="mb-1 block">X community ID <span className="text-xs text-neutral-500">(post originals into one big niche community, e.g. Build in Public — small accounts reach further there; blank = normal timeline)</span></span>
+        <input
+          type="text" value={form.communityId} onChange={(e) => set("communityId", e.target.value)}
+          className="w-full rounded bg-neutral-800 px-2 py-1 text-sm font-mono"
+          placeholder="numeric id from x.com/i/communities/<id>"
+        />
       </label>
 
       <label className="block">

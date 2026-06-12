@@ -175,10 +175,10 @@ export const xbotTweets = pgTable("xbot_tweets", {
   statusIdx: index("xbot_tweets_status_idx").on(t.status),
 }));
 
-/** The review queue: Claude-drafted replies, follow-ups, and original posts. */
+/** The review queue: Claude-drafted replies, follow-ups, original posts, and plug replies. */
 export const xbotDrafts = pgTable("xbot_drafts", {
   id: serial("id").primaryKey(),
-  kind: text("kind").notNull(),                        // reply | followup | post
+  kind: text("kind").notNull(),                        // reply | followup | post | plug
   targetId: integer("target_id").references(() => xbotTargets.id),
   tweetRefId: integer("tweet_ref_id").references(() => xbotTweets.id),
   inReplyToTweetId: text("in_reply_to_tweet_id"),      // null for original posts
@@ -191,6 +191,7 @@ export const xbotDrafts = pgTable("xbot_drafts", {
   postedAt: ts("posted_at"),
   editedByHuman: boolean("edited_by_human").default(false),
   rationale: text("rationale").default(""),            // why Claude chose this angle
+  mediaIdea: text("media_idea").default(""),           // suggested image/video — text-only posts underperform
   createdAt: ts("created_at").defaultNow(),
 }, (t) => ({
   statusIdx: index("xbot_drafts_status_idx").on(t.status),
@@ -216,15 +217,19 @@ export const xbotSettings = pgTable("xbot_settings", {
   likesAuto: boolean("likes_auto").notNull().default(true),
   dailyReplyCap: integer("daily_reply_cap").notNull().default(20),   // method: 15-30/day
   dailyLikeCap: integer("daily_like_cap").notNull().default(40),
-  dailyPostCap: integer("daily_post_cap").notNull().default(2),
+  dailyPostCap: integer("daily_post_cap").notNull().default(3),      // method: 3-5/day
   cooldownDays: integer("cooldown_days").notNull().default(3),       // min days between replies to same target
-  quietStartUtc: integer("quiet_start_utc").notNull().default(4),    // no engagement 04:00-12:00 UTC
-  quietEndUtc: integer("quiet_end_utc").notNull().default(12),
-  maxFollowers: integer("max_followers").notNull().default(5000),    // target discovery filter
+  quietStartUtc: integer("quiet_start_utc").notNull().default(22),   // engage 14:00-22:00 UTC ≈ 9am-5pm EST
+  quietEndUtc: integer("quiet_end_utc").notNull().default(14),
+  maxFollowers: integer("max_followers").notNull().default(5000),    // method: target creators <5000 followers
   keywords: text("keywords").notNull().default("[]"),                // JSON array; seeded from lib/xbot/config.ts
   searchSinceId: text("search_since_id"),                            // recent-search cursor
   xbotUserId: text("xbot_user_id"),                                  // cached own X user id
   voiceNotes: text("voice_notes").default(""),                       // user's voice/context injected into prompts
+  mission: text("mission").default(""),                              // public storyline, e.g. "0→$1k MRR"
+  productUrl: text("product_url").default(""),                       // linked in plug replies under traction posts
+  communityId: text("community_id").default(""),                     // X community to post into (small-account reach)
+  setupChecklist: text("setup_checklist").notNull().default("[]"),   // JSON array of completed playbook item ids
   updatedAt: ts("updated_at").defaultNow(),
 });
 

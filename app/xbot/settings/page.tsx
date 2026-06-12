@@ -29,6 +29,9 @@ export default async function XbotSettingsPage() {
           maxFollowers: s.maxFollowers,
           keywords: s.keywords,
           voiceNotes: s.voiceNotes ?? "",
+          mission: s.mission ?? "",
+          productUrl: s.productUrl ?? "",
+          communityId: s.communityId ?? "",
         }}
       />
     </div>

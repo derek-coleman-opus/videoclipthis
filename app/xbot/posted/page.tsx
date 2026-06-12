@@ -1,5 +1,6 @@
 import { desc, inArray } from "drizzle-orm";
 import { db, xbotDrafts } from "@/lib/db";
+import XbotPlugButton from "@/components/XbotPlugButton";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,8 @@ export default async function XbotPostedPage() {
       <h2 className="mb-3 text-sm font-medium text-neutral-400">Posted &amp; approved ({rows.length})</h2>
       <p className="mb-4 text-xs text-neutral-500">
         Approved drafts wait here until X credentials are configured; posted ones link to X.
+        When one of your posts gets traction, hit &ldquo;Plug product&rdquo; to draft a self-reply
+        with your product link — that traffic converts.
       </p>
       <div className="overflow-x-auto rounded-lg border border-neutral-800">
         <table className="w-full text-sm">
@@ -26,6 +29,7 @@ export default async function XbotPostedPage() {
               <th className="p-2 font-medium">Status</th>
               <th className="p-2 font-medium">Edited</th>
               <th className="p-2 font-medium">When</th>
+              <th className="p-2 font-medium"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-800">
@@ -44,10 +48,15 @@ export default async function XbotPostedPage() {
                 <td className="p-2 text-neutral-500">
                   {(d.postedAt ?? d.createdAt) ? new Date(d.postedAt ?? d.createdAt!).toLocaleString() : ""}
                 </td>
+                <td className="p-2">
+                  {d.kind === "post" && d.status === "posted" && d.xPostId && (
+                    <XbotPlugButton draftId={d.id} />
+                  )}
+                </td>
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan={5} className="p-3 text-neutral-500">Nothing approved or posted yet.</td></tr>
+              <tr><td colSpan={6} className="p-3 text-neutral-500">Nothing approved or posted yet.</td></tr>
             )}
           </tbody>
         </table>

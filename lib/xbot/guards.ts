@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { db, xbotActions, xbotDrafts, type XbotSettings, type XbotTarget } from "@/lib/db";
-import { DUPLICATE_LOOKBACK, DUPLICATE_SIMILARITY } from "./config";
+import { BANNED_PHRASES, DUPLICATE_LOOKBACK, DUPLICATE_SIMILARITY, LOW_VALUE_PHRASES } from "./config";
 
 /** Anti-spam guardrails. Every check reads the database, not in-memory state, because
  *  serverless invocations share nothing — the xbot_actions ledger is the source of truth. */
@@ -47,6 +47,31 @@ function wordOverlap(a: string, b: string): number {
   let shared = 0;
   for (const w of wa) if (wb.has(w)) shared++;
   return shared / (wa.size + wb.size - shared); // Jaccard
+}
+
+/** Reject drafts that violate the growth method: "let's connect"-style follower bait
+ *  anywhere, and replies that are mostly generic praise ("Good post", "Best of luck").
+ *  Returns a human-readable reason, or null when the draft is fine. */
+export function lowValueReason(text: string, kind: string): string | null {
+  const norm = normalize(text);
+  // Normalized phrases are alphanumerics+spaces, so they're regex-safe as-is.
+  const phraseRe = (phrase: string) => new RegExp(`\\b${normalize(phrase)}\\b`, "g");
+  for (const phrase of BANNED_PHRASES) {
+    if (phraseRe(phrase).test(norm)) {
+      return `contains follower-bait phrase "${phrase}" — these get follows that never engage`;
+    }
+  }
+  if (kind === "reply" || kind === "followup") {
+    let stripped = norm;
+    for (const phrase of LOW_VALUE_PHRASES) {
+      stripped = stripped.replace(phraseRe(phrase), " ");
+    }
+    const remaining = stripped.split(" ").filter(Boolean).length;
+    if (remaining < 5) {
+      return "reply is mostly generic praise — make it funny, contrarian, or concretely useful";
+    }
+  }
+  return null;
 }
 
 /** Reject drafts that exactly match or heavily overlap recent posted/approved drafts —

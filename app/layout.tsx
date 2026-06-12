@@ -29,6 +29,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <Link href="/xbot/targets" className="hover:text-white">Targets</Link>
                 <Link href="/xbot/queue" className="hover:text-white">Queue</Link>
                 <Link href="/xbot/posted" className="hover:text-white">Posted</Link>
+                <Link href="/xbot/playbook" className="hover:text-white">Playbook</Link>
                 <Link href="/xbot/settings" className="hover:text-white">XBot Settings</Link>
               </span>
             </nav>

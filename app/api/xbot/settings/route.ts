@@ -20,13 +20,17 @@ export async function POST(req: NextRequest) {
     }
   }
   if (typeof body.voiceNotes === "string") patch.voiceNotes = body.voiceNotes;
-  if (typeof body.keywords === "string") {
+  if (typeof body.mission === "string") patch.mission = body.mission.trim();
+  if (typeof body.productUrl === "string") patch.productUrl = body.productUrl.trim();
+  if (typeof body.communityId === "string") patch.communityId = body.communityId.trim();
+  for (const key of ["keywords", "setupChecklist"] as const) {
+    if (typeof body[key] !== "string") continue;
     try {
-      const arr = JSON.parse(body.keywords);
+      const arr = JSON.parse(body[key]);
       if (!Array.isArray(arr)) throw new Error("not an array");
-      patch.keywords = JSON.stringify(arr.map(String).filter(Boolean));
+      patch[key] = JSON.stringify(arr.map(String).filter(Boolean));
     } catch {
-      return NextResponse.json({ ok: false, error: "keywords must be a JSON array of strings" }, { status: 400 });
+      return NextResponse.json({ ok: false, error: `${key} must be a JSON array of strings` }, { status: 400 });
     }
   }
   try {
