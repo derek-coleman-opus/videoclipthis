@@ -5,12 +5,17 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
-  const patch: { paused?: boolean; threshold?: number; autonomy?: string } = {};
+  const patch: {
+    paused?: boolean; threshold?: number; autonomy?: string;
+    niche?: string; watchChannels?: string;
+  } = {};
   if (typeof body.paused === "boolean") patch.paused = body.paused;
   if (typeof body.threshold === "number") patch.threshold = body.threshold;
   if (typeof body.autonomy === "string" && ["review", "assisted", "auto"].includes(body.autonomy)) {
     patch.autonomy = body.autonomy;
   }
+  if (typeof body.niche === "string") patch.niche = body.niche.trim();
+  if (typeof body.watchChannels === "string") patch.watchChannels = body.watchChannels;
   try {
     const updated = await updateSettings(patch);
     return NextResponse.json({ ok: true, settings: updated });

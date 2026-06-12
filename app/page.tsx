@@ -1,100 +1,165 @@
-import { desc, eq, sql } from "drizzle-orm";
-import { db, candidates, clips, events, runs } from "@/lib/db";
-import { getSettings } from "@/lib/settings";
-import RunButton from "@/components/RunButton";
+import Link from "next/link";
+import { desc, eq } from "drizzle-orm";
+import { db, candidates, clips } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-function StatCard({ label, value, hint }: { label: string; value: string | number; hint?: string }) {
+const GITHUB_URL = "https://github.com/derek-coleman-opus/videoclipthis";
+
+/** The public face of the deployment: project pitch + a showcase of the clips this
+ *  instance found and posted. Reads the database directly (no API) and degrades to an
+ *  empty showcase when the database isn't configured — the page must never 500 for
+ *  an anonymous visitor. */
+export default async function PublicHomePage() {
+  const showcase = await loadShowcase();
+
   return (
-    <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-      <div className="text-2xl font-semibold">{value}</div>
-      <div className="text-sm text-neutral-400">{label}</div>
-      {hint && <div className="mt-1 text-xs text-neutral-600">{hint}</div>}
-    </div>
-  );
-}
-
-const BADGE: Record<string, string> = {
-  posted: "bg-green-900/60 text-green-300",
-  replied: "bg-green-900/60 text-green-300",
-  scored: "bg-blue-900/60 text-blue-300",
-  found: "bg-neutral-800 text-neutral-300",
-  skipped: "bg-neutral-800 text-neutral-500",
-  held: "bg-amber-900/60 text-amber-300",
-  error: "bg-red-900/60 text-red-300",
-  run: "bg-purple-900/60 text-purple-300",
-};
-
-async function loadData() {
-  const d = db();
-  const one = sql<number>`count(*)::int`;
-  const totalFound = Number((await d.select({ n: one }).from(candidates))[0]?.n ?? 0);
-  const posted = Number((await d.select({ n: one }).from(clips).where(eq(clips.status, "posted")))[0]?.n ?? 0);
-  const pending = Number((await d.select({ n: one }).from(clips).where(eq(clips.status, "pending_review")))[0]?.n ?? 0);
-  const reshared = Number((await d.select({ n: one }).from(clips).where(eq(clips.resharedBySpeaker, true)))[0]?.n ?? 0);
-  const recent = await d.select().from(events).orderBy(desc(events.createdAt)).limit(30);
-  const lastRun = (await d.select().from(runs).orderBy(desc(runs.startedAt)).limit(1))[0];
-  const cfg = await getSettings();
-  return { totalFound, posted, pending, reshared, recent, lastRun, cfg };
-}
-
-export default async function Dashboard() {
-  let data: Awaited<ReturnType<typeof loadData>>;
-  try {
-    data = await loadData();
-  } catch (e) {
-    return (
-      <div className="rounded-lg border border-amber-800 bg-amber-950/40 p-4 text-sm">
-        <p className="font-medium text-amber-300">Database not ready</p>
-        <p className="mt-1 text-neutral-300">{(e as Error).message}</p>
-        <p className="mt-2 text-neutral-400">
-          Set <code>DATABASE_URL</code>, run <code>npm run db:push</code>, then click{" "}
-          “Run Scout now”.
+    <div className="mx-auto max-w-5xl px-4 py-12">
+      {/* Hero */}
+      <header className="mb-14 text-center">
+        <p className="mb-3 text-xs uppercase tracking-widest text-neutral-500">open source</p>
+        <h1 className="mb-4 text-4xl font-bold">videoclipthis</h1>
+        <p className="mx-auto mb-6 max-w-2xl text-lg text-neutral-300">
+          An autonomous AI agent that watches the channels and people you care about, finds the
+          best moments in their long videos, clips them, and posts them — with credit to the
+          speaker, every time.
         </p>
-      </div>
-    );
-  }
-  const { totalFound, posted, pending, reshared, recent, lastRun, cfg } = data;
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex flex-wrap gap-2">
-          {cfg.paused && <span className="rounded bg-red-900/60 px-2 py-0.5 text-xs text-red-300">PAUSED</span>}
-          <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-300">autonomy: {cfg.autonomy}</span>
+        <div className="flex justify-center gap-3 text-sm">
+          <a
+            href={GITHUB_URL} target="_blank" rel="noreferrer"
+            className="rounded-md bg-white px-4 py-2 font-medium text-black hover:bg-neutral-200"
+          >
+            Get the code on GitHub
+          </a>
+          <a
+            href="https://x.com/videoclipthis" target="_blank" rel="noreferrer"
+            className="rounded-md border border-neutral-600 px-4 py-2 text-neutral-200 hover:bg-neutral-800"
+          >
+            See it live: @videoclipthis
+          </a>
         </div>
-        <RunButton />
-      </div>
+      </header>
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <StatCard label="Found" value={totalFound} />
-        <StatCard label="Posted" value={posted} />
-        <StatCard label="In review" value={pending} />
-        <StatCard label="Reshared by speaker" value={reshared} hint="credit-first loop" />
-      </div>
-
-      <div>
-        <h2 className="mb-2 text-sm font-medium text-neutral-400">
-          Activity{lastRun && lastRun.startedAt ? ` · last run ${new Date(lastRun.startedAt).toLocaleString()}` : ""}
-        </h2>
-        <ul className="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
-          {recent.length === 0 && (
-            <li className="p-3 text-sm text-neutral-500">No activity yet. Hit “Run Scout now”.</li>
-          )}
-          {recent.map((e) => (
-            <li key={e.id} className="flex items-center gap-3 p-3 text-sm">
-              <span className={`rounded px-2 py-0.5 text-xs ${BADGE[e.type] ?? "bg-neutral-800 text-neutral-300"}`}>
-                {e.type}
-              </span>
-              <span className="text-neutral-200">{e.message}</span>
-              <span className="ml-auto shrink-0 text-xs text-neutral-600">
-                {e.createdAt ? new Date(e.createdAt).toLocaleTimeString() : ""}
-              </span>
+      {/* How it works */}
+      <section className="mb-14">
+        <h2 className="mb-4 text-sm font-medium uppercase tracking-wide text-neutral-500">How it works</h2>
+        <ol className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            ["Scout", "Cron watches your channels and tracked people for fresh long-form video."],
+            ["Score", "Claude rates every video's clip-worthiness for your audience, 0–100."],
+            ["Clip", "OpusClip finds and renders the viral moment inside the keepers."],
+            ["Post", "Credit-first posts go to X — auto, or queued for your one-click review."],
+          ].map(([title, body], i) => (
+            <li key={title} className="rounded-lg border border-neutral-800 p-4">
+              <div className="mb-1 text-xs text-neutral-600">{i + 1}</div>
+              <div className="mb-1 font-medium">{title}</div>
+              <div className="text-sm text-neutral-400">{body}</div>
             </li>
           ))}
+        </ol>
+      </section>
+
+      {/* Any niche */}
+      <section className="mb-14 rounded-lg border border-neutral-800 p-6">
+        <h2 className="mb-2 text-sm font-medium uppercase tracking-wide text-neutral-500">Point it at any niche</h2>
+        <p className="mb-3 max-w-3xl text-sm text-neutral-300">
+          This deployment clips AI and developer content, but nothing about that is hard-coded.
+          Self-host it, open the admin, and set three things — no code changes:
+        </p>
+        <ul className="list-disc space-y-1 pl-5 text-sm text-neutral-400">
+          <li><b className="text-neutral-300">Niche</b> — the audience the AI scores clips for (fitness, travel, finance, …)</li>
+          <li><b className="text-neutral-300">Watched channels</b> — the YouTube channels it monitors</li>
+          <li><b className="text-neutral-300">Figures</b> — the people it tracks, credits, and tags</li>
         </ul>
-      </div>
+        <p className="mt-3 text-sm text-neutral-500">
+          Your keys, your database, your account — the repo ships with zero data and zero secrets.
+        </p>
+      </section>
+
+      {/* Showcase */}
+      <section className="mb-14">
+        <h2 className="mb-4 text-sm font-medium uppercase tracking-wide text-neutral-500">
+          Clips this agent found &amp; cut
+        </h2>
+        {showcase.length === 0 ? (
+          <p className="rounded-lg border border-neutral-800 p-6 text-sm text-neutral-500">
+            No posted clips to show yet — the agent is warming up. Meanwhile,{" "}
+            <a href={`https://x.com/videoclipthis`} target="_blank" rel="noreferrer" className="underline hover:text-neutral-300">
+              follow @videoclipthis
+            </a>{" "}
+            to catch them as they land.
+          </p>
+        ) : (
+          <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {showcase.map((c) => (
+              <li key={c.id} className="flex flex-col rounded-lg border border-neutral-800 p-4">
+                <p className="mb-2 line-clamp-3 text-sm text-neutral-200">{c.hookCaption || c.postText}</p>
+                <p className="mb-3 line-clamp-2 text-xs text-neutral-500">
+                  {c.speaker ? `${c.speaker} — ` : ""}{c.title}
+                </p>
+                <div className="mt-auto flex gap-3 text-xs">
+                  {c.xPostId && (
+                    <a href={`https://x.com/i/status/${c.xPostId}`} target="_blank" rel="noreferrer" className="text-neutral-300 underline hover:text-white">
+                      watch on X ↗
+                    </a>
+                  )}
+                  {c.sourceUrl && (
+                    <a href={c.sourceUrl} target="_blank" rel="noreferrer" className="text-neutral-500 underline hover:text-neutral-300">
+                      full video ↗
+                    </a>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <footer className="border-t border-neutral-800 pt-6 text-center text-xs text-neutral-600">
+        <p>
+          Built in public by{" "}
+          <a href="https://x.com/derekisbuilding" target="_blank" rel="noreferrer" className="underline hover:text-neutral-400">
+            @derekisbuilding
+          </a>
+          {" · "}
+          <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="underline hover:text-neutral-400">source</a>
+          {" · "}
+          <Link href="/dashboard" className="underline hover:text-neutral-400">admin</Link>
+        </p>
+      </footer>
     </div>
   );
+}
+
+interface ShowcaseClip {
+  id: number;
+  hookCaption: string;
+  postText: string;
+  xPostId: string | null;
+  title: string;
+  speaker: string;
+  sourceUrl: string;
+}
+
+async function loadShowcase(): Promise<ShowcaseClip[]> {
+  try {
+    const rows = await db()
+      .select({ clip: clips, cand: candidates })
+      .from(clips)
+      .leftJoin(candidates, eq(clips.candidateId, candidates.id))
+      .where(eq(clips.status, "posted"))
+      .orderBy(desc(clips.postedAt))
+      .limit(24);
+    return rows.map(({ clip, cand }) => ({
+      id: clip.id,
+      hookCaption: clip.hookCaption ?? "",
+      postText: clip.postText,
+      xPostId: clip.xPostId,
+      title: cand?.title ?? "",
+      speaker: cand?.speaker || cand?.figureName || "",
+      sourceUrl: cand?.url ?? "",
+    }));
+  } catch {
+    return []; // no DATABASE_URL / cold deployment — public page still renders
+  }
 }
