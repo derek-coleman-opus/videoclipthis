@@ -29,6 +29,13 @@
       "when": 1781184168592,
       "tag": "0003_heavy_richard_fisk",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781224987130,
+      "tag": "0004_lowly_switch",
+      "breakpoints": true
     }
   ]
 }

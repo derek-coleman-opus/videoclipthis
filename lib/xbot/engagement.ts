@@ -1,0 +1,60 @@
+import { eq, sql } from "drizzle-orm";
+import { db, xbotActions, xbotDrafts, xbotTargets, type XbotDraft } from "@/lib/db";
+import { logEvent } from "@/lib/pipeline/events";
+import { slog } from "@/lib/pipeline/util";
+import { describeXbotError, xbotRw } from "./client";
+import { getXbotSettings } from "./settings";
+import { underCap } from "./guards";
+
+export interface PostOutcome {
+  xPostId: string;
+}
+
+/** Post a single approved draft to X as the personal account, enforcing the daily cap
+ *  for its kind, recording the action in the ledger, and updating the draft + target.
+ *  Throws (and marks the draft failed) on any X error so the dashboard shows it loudly. */
+export async function postDraft(draft: XbotDraft): Promise<PostOutcome> {
+  const settings = await getXbotSettings();
+  const isReply = draft.kind === "reply" || draft.kind === "followup";
+  const capKind = isReply ? "reply" : "post";
+  const cap = isReply ? settings.dailyReplyCap : settings.dailyPostCap;
+  if (!(await underCap(capKind, cap))) {
+    throw new Error(`daily ${capKind} cap (${cap}) reached — try again tomorrow or raise the cap`);
+  }
+
+  const database = db();
+  try {
+    const client = await xbotRw();
+    const payload: Record<string, unknown> = { text: draft.text };
+    if (draft.inReplyToTweetId) payload.reply = { in_reply_to_tweet_id: draft.inReplyToTweetId };
+    const res = await client.v2.tweet(payload as any).catch((e) => { throw describeXbotError(e); });
+    const xPostId = res.data.id;
+
+    await database.update(xbotDrafts)
+      .set({ status: "posted", xPostId, postedAt: new Date() })
+      .where(eq(xbotDrafts.id, draft.id));
+    await database.insert(xbotActions).values({
+      kind: capKind, targetId: draft.targetId, tweetId: xPostId,
+    });
+    if (isReply && draft.targetId) {
+      await database.update(xbotTargets)
+        .set({
+          lastRepliedAt: new Date(),
+          repliesSent: sql`${xbotTargets.repliesSent} + 1`,
+          status: "active",
+        })
+        .where(eq(xbotTargets.id, draft.targetId));
+    }
+    await logEvent(
+      isReply ? "xbot_replied" : "xbot_posted",
+      isReply ? `Replied to tweet ${draft.inReplyToTweetId}` : `Posted: ${draft.text.slice(0, 80)}`,
+      "xbot_drafts", draft.id,
+    );
+    slog("xbot_post", { draftId: draft.id, kind: draft.kind, xPostId });
+    return { xPostId };
+  } catch (e) {
+    await database.update(xbotDrafts).set({ status: "failed" }).where(eq(xbotDrafts.id, draft.id));
+    await logEvent("xbot_error", `Post failed for draft #${draft.id}: ${(e as Error).message}`, "xbot_drafts", draft.id);
+    throw e;
+  }
+}
