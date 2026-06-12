@@ -3,6 +3,7 @@
   "crons": [
     { "path": "/api/cron/scout", "schedule": "*/30 * * * *" },
     { "path": "/api/cron/summon", "schedule": "*/5 * * * *" },
-    { "path": "/api/cron/feedback", "schedule": "0 * * * *" }
+    { "path": "/api/cron/feedback", "schedule": "0 * * * *" },
+    { "path": "/api/cron/xbot-inbound", "schedule": "*/30 * * * *" }
   ]
 }

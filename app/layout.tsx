@@ -24,6 +24,14 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <Link href="/replies" className="hover:text-white">Replies</Link>
               <Link href="/figures" className="hover:text-white">Figures</Link>
               <Link href="/settings" className="hover:text-white">Settings</Link>
+              <span className="flex gap-4 border-l border-neutral-700 pl-4">
+                <Link href="/xbot" className="hover:text-white">XBot</Link>
+                <Link href="/xbot/targets" className="hover:text-white">Targets</Link>
+                <Link href="/xbot/queue" className="hover:text-white">Queue</Link>
+                <Link href="/xbot/posted" className="hover:text-white">Posted</Link>
+                <Link href="/xbot/playbook" className="hover:text-white">Playbook</Link>
+                <Link href="/xbot/settings" className="hover:text-white">XBot Settings</Link>
+              </span>
             </nav>
           </header>
           <main className="py-6">{children}</main>
