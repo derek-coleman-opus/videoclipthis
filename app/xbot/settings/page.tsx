@@ -23,6 +23,7 @@ export default async function XbotSettingsPage() {
           dailyReplyCap: s.dailyReplyCap,
           dailyLikeCap: s.dailyLikeCap,
           dailyPostCap: s.dailyPostCap,
+          dailyEngageCap: s.dailyEngageCap,
           cooldownDays: s.cooldownDays,
           quietStartUtc: s.quietStartUtc,
           quietEndUtc: s.quietEndUtc,

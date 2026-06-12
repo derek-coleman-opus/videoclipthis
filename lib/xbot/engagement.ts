@@ -16,9 +16,12 @@ export interface PostOutcome {
 export async function postDraft(draft: XbotDraft): Promise<PostOutcome> {
   const settings = await getXbotSettings();
   // "plug" is a self-reply under our own traction post — mechanically a reply.
-  const isReply = draft.kind === "reply" || draft.kind === "followup" || draft.kind === "plug";
-  const capKind = isReply ? "reply" : "post";
-  const cap = isReply ? settings.dailyReplyCap : settings.dailyPostCap;
+  // "engage" (responding to someone who commented on us) gets its own, higher cap so
+  // replying to everyone never competes with the outbound growth-reply budget.
+  const isReply = ["reply", "followup", "plug", "engage"].includes(draft.kind);
+  const capKind = draft.kind === "engage" ? "engage" : isReply ? "reply" : "post";
+  const cap = draft.kind === "engage" ? settings.dailyEngageCap
+    : isReply ? settings.dailyReplyCap : settings.dailyPostCap;
   if (!(await underCap(capKind, cap))) {
     throw new Error(`daily ${capKind} cap (${cap}) reached — try again tomorrow or raise the cap`);
   }
@@ -40,7 +43,9 @@ export async function postDraft(draft: XbotDraft): Promise<PostOutcome> {
     await database.insert(xbotActions).values({
       kind: capKind, targetId: draft.targetId, tweetId: xPostId,
     });
-    if (isReply && draft.targetId) {
+    // Only outbound growth replies advance the per-target cooldown — engage-backs and
+    // plugs are conversation, and must never suppress a future outbound reply.
+    if ((draft.kind === "reply" || draft.kind === "followup") && draft.targetId) {
       await database.update(xbotTargets)
         .set({
           lastRepliedAt: new Date(),

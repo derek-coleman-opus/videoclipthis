@@ -5,6 +5,7 @@ import { getXbotSettings, parseSetupChecklist } from "@/lib/xbot/settings";
 import { hasXbotWriteEnv } from "@/lib/xbot/env";
 import { TARGET_ROSTER_GOAL } from "@/lib/xbot/config";
 import { SETUP_ITEMS } from "@/lib/xbot/playbook";
+import XbotInboundButton from "@/components/XbotInboundButton";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,7 @@ export default async function XbotPage() {
 
   const stats: Array<[string, string]> = [
     ["Replies today", `${today.reply} / ${settings.dailyReplyCap}`],
+    ["Engage-backs today", `${today.engage} / ${settings.dailyEngageCap}`],
     ["Likes today", `${today.like} / ${settings.dailyLikeCap}`],
     ["Posts today", `${today.post} / ${settings.dailyPostCap}`],
     ["Pending review", String(pending)],
@@ -45,7 +47,7 @@ export default async function XbotPage() {
         </div>
       </div>
 
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
         {stats.map(([label, value]) => (
           <div key={label} className="rounded-lg border border-neutral-800 p-3">
             <div className="text-xs text-neutral-500">{label}</div>
@@ -54,10 +56,11 @@ export default async function XbotPage() {
         ))}
       </div>
 
-      <div className="mb-6 flex gap-3 text-sm">
+      <div className="mb-6 flex flex-wrap items-center gap-3 text-sm">
         <Link href="/xbot/queue" className="rounded-md bg-white px-3 py-1.5 font-medium text-black hover:bg-neutral-200">
           Review queue {pending > 0 ? `(${pending})` : ""}
         </Link>
+        <XbotInboundButton disabled={!hasCreds} />
         <Link href="/xbot/targets" className="rounded-md border border-neutral-600 px-3 py-1.5 text-neutral-200 hover:bg-neutral-800">
           Manage targets
         </Link>
@@ -93,7 +96,7 @@ async function load() {
     .select({ kind: xbotActions.kind })
     .from(xbotActions)
     .where(gte(xbotActions.createdAt, dayStart));
-  const today = { reply: 0, like: 0, post: 0 } as Record<string, number>;
+  const today = { reply: 0, like: 0, post: 0, engage: 0 } as Record<string, number>;
   for (const a of todayActions) today[a.kind] = (today[a.kind] ?? 0) + 1;
 
   const pending = (await database

@@ -11,7 +11,7 @@ const RULES: Array<{ title: string; points: string[] }> = [
     points: [
       "Engage your 40–50 target creators regularly — replies are how you grow before your posts work.",
       "Every reply must be funny, contrarian, or value-adding. \"Good post\" / \"Best of luck\" replies are auto-rejected by the drafting guard.",
-      "Reply to EVERYONE who engages with your posts — the algorithm shows new posts to followers first; engaged followers keep the account alive.",
+      "Reply to EVERYONE who engages with your posts — the algorithm shows new posts to followers first; engaged followers keep the account alive. \"Check inbound engagement\" on the XBot dashboard drafts these automatically.",
     ],
   },
   {

@@ -22,6 +22,7 @@ export type XbotSettingsPatch = Partial<{
   dailyReplyCap: number;
   dailyLikeCap: number;
   dailyPostCap: number;
+  dailyEngageCap: number;
   cooldownDays: number;
   quietStartUtc: number;
   quietEndUtc: number;
@@ -33,6 +34,7 @@ export type XbotSettingsPatch = Partial<{
   communityId: string;
   setupChecklist: string;
   searchSinceId: string | null;
+  mentionsSinceId: string | null;
   xbotUserId: string | null;
 }>;
 

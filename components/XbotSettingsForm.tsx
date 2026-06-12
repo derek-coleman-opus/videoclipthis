@@ -11,6 +11,7 @@ type Initial = {
   dailyReplyCap: number;
   dailyLikeCap: number;
   dailyPostCap: number;
+  dailyEngageCap: number;
   cooldownDays: number;
   quietStartUtc: number;
   quietEndUtc: number;
@@ -104,6 +105,10 @@ export default function XbotSettingsForm({ initial }: { initial: Initial }) {
       <label className={row}>
         <span>Daily post cap <span className="text-xs text-neutral-500">(method: 3–5)</span></span>
         <input type="number" min={0} className={num} value={form.dailyPostCap} onChange={(e) => set("dailyPostCap", Number(e.target.value))} />
+      </label>
+      <label className={row}>
+        <span>Daily engage-back cap <span className="text-xs text-neutral-500">(reply to everyone who comments)</span></span>
+        <input type="number" min={0} className={num} value={form.dailyEngageCap} onChange={(e) => set("dailyEngageCap", Number(e.target.value))} />
       </label>
       <label className={row}>
         <span>Reply cooldown per target (days)</span>

@@ -165,7 +165,7 @@ export const xbotTweets = pgTable("xbot_tweets", {
   likeCount: integer("like_count").default(0),
   replyCount: integer("reply_count").default(0),
   tweetedAt: ts("tweeted_at"),
-  foundVia: text("found_via").notNull().default("search"), // search | seed | reengage | manual
+  foundVia: text("found_via").notNull().default("search"), // search | seed | reengage | manual | inbound
   liked: boolean("liked").default(false),
   likedAt: ts("liked_at"),
   status: text("status").notNull().default("found"),   // found | drafted | skipped | stale
@@ -175,10 +175,11 @@ export const xbotTweets = pgTable("xbot_tweets", {
   statusIdx: index("xbot_tweets_status_idx").on(t.status),
 }));
 
-/** The review queue: Claude-drafted replies, follow-ups, original posts, and plug replies. */
+/** The review queue: Claude-drafted replies, follow-ups, original posts, plug replies,
+ *  and engage-backs (responses to people who commented on our posts). */
 export const xbotDrafts = pgTable("xbot_drafts", {
   id: serial("id").primaryKey(),
-  kind: text("kind").notNull(),                        // reply | followup | post | plug
+  kind: text("kind").notNull(),                        // reply | followup | post | plug | engage
   targetId: integer("target_id").references(() => xbotTargets.id),
   tweetRefId: integer("tweet_ref_id").references(() => xbotTweets.id),
   inReplyToTweetId: text("in_reply_to_tweet_id"),      // null for original posts
@@ -218,12 +219,14 @@ export const xbotSettings = pgTable("xbot_settings", {
   dailyReplyCap: integer("daily_reply_cap").notNull().default(20),   // method: 15-30/day
   dailyLikeCap: integer("daily_like_cap").notNull().default(40),
   dailyPostCap: integer("daily_post_cap").notNull().default(3),      // method: 3-5/day
+  dailyEngageCap: integer("daily_engage_cap").notNull().default(50), // engage-backs: reply to EVERYONE who comments
   cooldownDays: integer("cooldown_days").notNull().default(3),       // min days between replies to same target
   quietStartUtc: integer("quiet_start_utc").notNull().default(22),   // engage 14:00-22:00 UTC ≈ 9am-5pm EST
   quietEndUtc: integer("quiet_end_utc").notNull().default(14),
   maxFollowers: integer("max_followers").notNull().default(5000),    // method: target creators <5000 followers
   keywords: text("keywords").notNull().default("[]"),                // JSON array; seeded from lib/xbot/config.ts
   searchSinceId: text("search_since_id"),                            // recent-search cursor
+  mentionsSinceId: text("mentions_since_id"),                        // inbound-engagement (mentions) cursor
   xbotUserId: text("xbot_user_id"),                                  // cached own X user id
   voiceNotes: text("voice_notes").default(""),                       // user's voice/context injected into prompts
   mission: text("mission").default(""),                              // public storyline, e.g. "0→$1k MRR"

@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
     if (typeof body[key] === "string" && ["review", "auto"].includes(body[key])) patch[key] = body[key];
   }
   for (const key of [
-    "dailyReplyCap", "dailyLikeCap", "dailyPostCap", "cooldownDays",
+    "dailyReplyCap", "dailyLikeCap", "dailyPostCap", "dailyEngageCap", "cooldownDays",
     "quietStartUtc", "quietEndUtc", "maxFollowers",
   ] as const) {
     if (typeof body[key] === "number" && Number.isFinite(body[key]) && body[key] >= 0) {

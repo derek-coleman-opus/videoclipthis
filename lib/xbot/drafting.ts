@@ -46,6 +46,19 @@ Rules:
 Return JSON: {"variants": [{"text": "<post>", "rationale": "<short>", "media_idea": "<what to attach>"}, ...]}
 with 3 distinct variants (mix number-openers and take-openers when the context allows).`;
 
+const ENGAGE_PROMPT = `You write responses for an engineer building in public on X, replying to
+someone who commented on THEIR post (or answered one of their replies). Replying to every
+engager is how a small account stays alive: the algorithm shows new posts to followers first,
+and engaged followers are the ones who keep showing up.
+Rules:
+- Continue the conversation, don't close it: react to their specific point, answer any
+  question directly, and when natural end with one short question back (about what they're
+  building, their experience with the topic — never "thoughts?").
+- Warm peer tone; gratitude is fine but never the whole reply.
+- 1-2 SHORT sentences, under ${MAX_DRAFT_CHARS} characters.
+- No hashtags, no links, no pitching, no "let's connect".
+Return JSON: {"text": "<the reply>", "rationale": "<short>"}.`;
+
 const PLUG_PROMPT = `You write the "plug reply" an engineer posts under their OWN tweet once it
 gets traction: a casual self-reply that points the new readers at the product, turning the
 moment into visitors without souring it.
@@ -149,6 +162,29 @@ export async function draftPostVariants(voiceNotes: string, mission = ""): Promi
     rationale: String(v.rationale ?? ""),
     mediaIdea: String(v.media_idea ?? ""),
   }));
+}
+
+/** Draft the engage-back response to someone who commented on our post / our reply. */
+export async function draftEngageBack(opts: {
+  theirText: string;
+  theirHandle: string;
+  ourText?: string;      // what of ours they were responding to, when known
+  voiceNotes?: string;
+  mission?: string;
+}): Promise<Drafted> {
+  const avoid = await recentDraftTexts(["engage"]);
+  const user = [
+    `Commenter: @${opts.theirHandle}`,
+    opts.ourText ? `Your post/reply they responded to:\n${opts.ourText}` : "They responded to one of your posts.",
+    `Their comment:\n${opts.theirText}`,
+    opts.voiceNotes ? `About you:\n${opts.voiceNotes}` : "",
+    opts.mission ? `Your public mission/storyline: ${opts.mission}` : "",
+    avoid.length ? `Do not reuse phrasings from your recent engage-backs:\n${avoid.map((t) => `- ${t}`).join("\n")}` : "",
+  ].filter(Boolean).join("\n\n");
+
+  const raw = await callClaude(ENGAGE_PROMPT, user);
+  const obj = parseJson(raw);
+  return { text: cleanDraft(obj.text), rationale: String(obj.rationale ?? "") };
 }
 
 /** Draft the traction self-reply that links the product under one of our own posts. */
