@@ -179,11 +179,17 @@ export function youtubeSource(
   };
 }
 
-export function buildSources(figures: Figure[], opts?: { figureSearch?: boolean }): Source[] {
+export function buildSources(
+  figures: Figure[],
+  opts?: { figureSearch?: boolean; channels?: { name: string; handle?: string }[] },
+): Source[] {
+  // Settings-provided channels (the admin "Watched channels" field) override the code
+  // WATCHLIST, so self-hosters can point the bot at their niche without a deploy.
+  const channels = opts?.channels?.length ? opts.channels : WATCHLIST.youtubeChannels;
   const sources: Source[] = [];
-  if (WATCHLIST.youtubeChannels.length) {
+  if (channels.length) {
     sources.push(youtubeSource(
-      WATCHLIST.youtubeChannels, process.env.YOUTUBE_API_KEY ?? "", figures, opts?.figureSearch ?? true,
+      channels, process.env.YOUTUBE_API_KEY ?? "", figures, opts?.figureSearch ?? true,
     ));
   }
   // TODO(M-next): podcast (RSS), X signal stream, HN, Reddit sources.

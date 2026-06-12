@@ -1,13 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Protect the whole admin with HTTP Basic auth. Cron routes authenticate via CRON_SECRET instead.
+// Public landing + showcase lives at "/"; everything else (admin pages, APIs) is behind
+// HTTP Basic auth. Cron routes authenticate via CRON_SECRET inside their handlers.
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
 
+/** Paths anyone may load without a password. Keep this list tight: the public surface
+ *  of an open-source deployment is the landing page and nothing else. */
+function isPublic(pathname: string): boolean {
+  return pathname === "/";
+}
+
 export function middleware(req: NextRequest) {
-  if (req.nextUrl.pathname.startsWith("/api/cron")) {
-    return NextResponse.next();
+  const { pathname } = req.nextUrl;
+  if (isPublic(pathname)) return NextResponse.next();
+  if (pathname.startsWith("/api/cron")) {
+    return NextResponse.next(); // authenticated by CRON_SECRET in the route handlers
   }
   const expected = process.env.ADMIN_PASSWORD;
   if (!expected) return NextResponse.next(); // unconfigured (local dev) → allow

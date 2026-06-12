@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db, candidates, runs } from "@/lib/db";
-import { getSettings, updateSummonState } from "@/lib/settings";
+import { getSettings, parseWatchChannels, updateSummonState } from "@/lib/settings";
 import { DEFAULT_THRESHOLD, MAX_CLIPS_PER_RUN, FIGURE_SEARCH_INTERVAL_H } from "./config";
 import { requireScoutEnv } from "./env";
 import { slog } from "./util";
@@ -55,9 +55,12 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   const figureSearchDue =
     !cfg.figureSearchAt ||
     Date.now() - new Date(cfg.figureSearchAt).getTime() >= FIGURE_SEARCH_INTERVAL_H * 3600 * 1000;
-  const sources = buildSources(figures, { figureSearch: figureSearchDue });
+  const sources = buildSources(figures, {
+    figureSearch: figureSearchDue,
+    channels: parseWatchChannels(cfg), // settings override → point the bot at any niche
+  });
   if (figureSearchDue) await updateSummonState({ figureSearchAt: new Date() });
-  const scorer = claudeScorer(process.env.ANTHROPIC_API_KEY ?? "");
+  const scorer = claudeScorer(process.env.ANTHROPIC_API_KEY ?? "", cfg.niche ?? "");
   const opusKey = process.env.OPUSCLIP_API_KEY ?? "";
   const opusBase = process.env.OPUSCLIP_API_BASE ?? "";
   const threshold = cfg.threshold ?? DEFAULT_THRESHOLD;
