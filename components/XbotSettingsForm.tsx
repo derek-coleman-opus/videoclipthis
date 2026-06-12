@@ -94,6 +94,11 @@ export default function XbotSettingsForm({ initial }: { initial: Initial }) {
         <input type="checkbox" checked={form.likesAuto} onChange={(e) => set("likesAuto", e.target.checked)} />
       </label>
 
+      <p className="rounded bg-neutral-900 p-2 text-xs text-neutral-500">
+        Per X automation rules, daily caps are also spread out automatically: an hourly cap
+        (daily ÷ active hours) plus a minimum gap between consecutive actions (replies 5 min,
+        engage-backs 3 min, posts 30 min) — the bot can never burst a day&apos;s budget at once.
+      </p>
       <label className={row}>
         <span>Daily reply cap <span className="text-xs text-neutral-500">(method: 15–30)</span></span>
         <input type="number" min={0} className={num} value={form.dailyReplyCap} onChange={(e) => set("dailyReplyCap", Number(e.target.value))} />

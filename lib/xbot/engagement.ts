@@ -4,7 +4,7 @@ import { logEvent } from "@/lib/pipeline/events";
 import { slog } from "@/lib/pipeline/util";
 import { describeXbotError, xbotRw } from "./client";
 import { getXbotSettings } from "./settings";
-import { underCap } from "./guards";
+import { pacingViolation, underCap } from "./guards";
 
 export interface PostOutcome {
   xPostId: string;
@@ -25,6 +25,8 @@ export async function postDraft(draft: XbotDraft): Promise<PostOutcome> {
   if (!(await underCap(capKind, cap))) {
     throw new Error(`daily ${capKind} cap (${cap}) reached — try again tomorrow or raise the cap`);
   }
+  const pacing = await pacingViolation(capKind, cap, settings);
+  if (pacing) throw new Error(pacing);
 
   const database = db();
   try {
