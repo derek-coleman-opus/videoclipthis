@@ -29,3 +29,18 @@ All 8 tasks shipped; `tsc --noEmit` + `next build` pass. The full pipeline runs 
 **To go live (`TODO-LIVE` markers in code):** real channel IDs + YouTube transcript fetch; OpusClip endpoint shapes (confirm at api.opus.pro) + key; X tokens + "Automated" label + mention polling; X metrics fetch. Then set keys, `MOCK_MODE=0`, raise autonomy `review → auto`.
 
 **Run:** `npm install && npm run db:push && npm run dev` (set `DATABASE_URL` + `ADMIN_PASSWORD`). Deploy: import to Vercel + add Neon + set env. See README.
+
+## Post-launch milestones
+
+### XBot — personal-account growth bot
+- [x] **Phase 1 — drafting + review** — 6 `xbot_*` tables; Claude drafts replies/follow-ups/posts; review queue with inline edit + approve/reject; anti-spam guards (duplicate detection, daily caps, quiet hours, per-target cooldown); separate `XBOT_*` credentials, drafting-only without them. Starts paused, review-everything.
+- [x] **Growth playbook encoded** — reply prompt requires funny/contrarian/value-adding (generic-praise + follower-bait auto-rejected); mission storyline injected into prompts; post variants ship a media idea (text-only underperforms); `plug` self-reply links the product under a traction post; `community_id` posts originals into a niche community; defaults set to method (3 posts/day, engage 9am–5pm EST, targets <5k). New `/xbot/playbook` page with persisted 0-followers checklist.
+- [x] **Reply-to-everyone loop** — `inbound.ts` pulls new mentions (comments on our posts + replies to our replies), queues an `engage` draft per engager; manual button + `/api/cron/xbot-inbound` (30m); separate engage-back cap so it never competes with outbound replies; commenters flagged `engaged_back`.
+- [x] **X automation-rules pacing** — daily caps spread into an hourly cap (daily ÷ active hours) + per-kind minimum gaps (replies 5m, engage 3m, posts 30m), all ledger-based; no bursting a day's budget.
+
+### Open-source restructure
+- [x] **Public/private split** — public `/` landing + showcase of posted clips (degrades with no DB); all admin moved into `app/(admin)` route group behind `ADMIN_PASSWORD` (dashboard now `/dashboard`); middleware allows only `/` + `/api/cron/*`. Verified: `/` 200, admin/api 401 unauthenticated.
+- [x] **Niche as a setting** — `settings.niche` feeds the Claude scoring rubric; `settings.watch_channels` overrides the code `WATCHLIST` at scout time; both editable in admin Settings. Point it at fitness/travel/finance with no code changes.
+- [x] **OSS hygiene** — MIT `LICENSE`; README rewritten for self-hosters; repo ships zero data + zero secrets (scan clean). Console-SQL single-statement rule recorded in `CLAUDE.md`; `scripts/xbot-schema-bootstrap.sql` for Neon-console migration.
+
+_All shipped on branch `claude/vigilant-goodall-ci4rs2` (PR #15); `tsc --noEmit` + `next build` green; auth + pacing behavior verified at runtime._
