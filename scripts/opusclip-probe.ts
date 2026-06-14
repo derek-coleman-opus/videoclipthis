@@ -11,7 +11,7 @@
  *
  * Paste the full output back into the Claude session to get the client fixed from real data.
  */
-import { buildCurationPrompt } from "@/lib/pipeline/opusclip";
+import { buildCreateProjectBody } from "@/lib/pipeline/opusclip";
 
 const BASE = (process.env.OPUSCLIP_API_BASE ?? "https://api.opus.pro").replace(/\/$/, "");
 const KEY = process.env.OPUSCLIP_API_KEY ?? "";
@@ -54,18 +54,7 @@ async function main() {
   }
 
   // 2. Create a project with our EXACT production payload.
-  const payload = {
-    videoUrl: VIDEO,
-    curationPref: {
-      model: "ClipAnything",
-      clipDurations: [30, 60, 90],
-      customPrompt: buildCurationPrompt({ title: "probe run" }),
-    },
-    renderPref: {
-      layoutAspectRatio: "9:16",
-      quickstartConfig: { enableRemoveFillerWords: true },
-    },
-  };
+  const payload = buildCreateProjectBody(VIDEO, { title: "probe run" });
   console.log(`\n===== POST /api/clip-projects payload =====\n${JSON.stringify(payload, null, 2)}`);
   const created = await call("POST", "/api/clip-projects", payload);
   show("POST /api/clip-projects", created.status, created.text);
