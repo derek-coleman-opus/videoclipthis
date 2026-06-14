@@ -114,6 +114,128 @@ export const figures = pgTable("figures", {
   handleIdx: uniqueIndex("figures_handle_idx").on(t.xHandle),
 }));
 
+/* ───────────────────────────── XBot (personal-account growth bot) ─────────────────────────────
+   Separate from the clip bot above: these tables drive the engagement pipeline for the
+   admin's personal building-in-public X account (likes auto, replies/posts reviewed). */
+
+/** Accounts the XBot engages with — discovered via search/seeds or added manually. */
+export const xbotTargets = pgTable("xbot_targets", {
+  id: serial("id").primaryKey(),
+  xUserId: text("x_user_id"),                          // null until hydrated from the X API
+  handle: text("handle").notNull(),                    // no @
+  displayName: text("display_name").default(""),
+  bio: text("bio").default(""),
+  followers: integer("followers").default(0),
+  following: integer("following").default(0),
+  engagementRate: real("engagement_rate").default(0),  // avg(likes+replies)/followers, sampled
+  score: integer("score"),                             // Claude account-quality 0-100
+  rationale: text("rationale").default(""),
+  source: text("source").notNull().default("manual"),  // search | seed | manual
+  seedHandle: text("seed_handle"),                     // which seed surfaced them
+  status: text("status").notNull().default("candidate"), // candidate|active|cooldown|engaged_back|archived|blocked
+  repliesSent: integer("replies_sent").default(0),
+  engagedBack: boolean("engaged_back").default(false), // they liked/replied to one of our replies
+  lastRepliedAt: ts("last_replied_at"),
+  lastCheckedAt: ts("last_checked_at"),                // re-engage poll cursor
+  createdAt: ts("created_at").defaultNow(),
+}, (t) => ({
+  handleIdx: uniqueIndex("xbot_targets_handle_idx").on(t.handle),
+  statusIdx: index("xbot_targets_status_idx").on(t.status),
+}));
+
+/** Seed accounts whose repliers/engagers get mined as target candidates. */
+export const xbotSeeds = pgTable("xbot_seeds", {
+  id: serial("id").primaryKey(),
+  handle: text("handle").notNull(),
+  xUserId: text("x_user_id"),
+  active: boolean("active").notNull().default(true),
+  lastMinedAt: ts("last_mined_at"),                    // mining throttle
+  createdAt: ts("created_at").defaultNow(),
+}, (t) => ({
+  handleIdx: uniqueIndex("xbot_seeds_handle_idx").on(t.handle),
+}));
+
+/** Discovered tweets by targets — the like/reply candidate pool. */
+export const xbotTweets = pgTable("xbot_tweets", {
+  id: serial("id").primaryKey(),
+  tweetId: text("tweet_id").notNull(),                 // dedupes across runs
+  targetId: integer("target_id").references(() => xbotTargets.id),
+  authorHandle: text("author_handle").notNull(),
+  text: text("text").notNull(),                        // snapshot for drafting context
+  likeCount: integer("like_count").default(0),
+  replyCount: integer("reply_count").default(0),
+  tweetedAt: ts("tweeted_at"),
+  foundVia: text("found_via").notNull().default("search"), // search | seed | reengage | manual | inbound
+  liked: boolean("liked").default(false),
+  likedAt: ts("liked_at"),
+  status: text("status").notNull().default("found"),   // found | drafted | skipped | stale
+  createdAt: ts("created_at").defaultNow(),
+}, (t) => ({
+  tweetIdIdx: uniqueIndex("xbot_tweets_tweet_id_idx").on(t.tweetId),
+  statusIdx: index("xbot_tweets_status_idx").on(t.status),
+}));
+
+/** The review queue: Claude-drafted replies, follow-ups, original posts, plug replies,
+ *  and engage-backs (responses to people who commented on our posts). */
+export const xbotDrafts = pgTable("xbot_drafts", {
+  id: serial("id").primaryKey(),
+  kind: text("kind").notNull(),                        // reply | followup | post | plug | engage
+  targetId: integer("target_id").references(() => xbotTargets.id),
+  tweetRefId: integer("tweet_ref_id").references(() => xbotTweets.id),
+  inReplyToTweetId: text("in_reply_to_tweet_id"),      // null for original posts
+  contextText: text("context_text").default(""),       // target tweet snapshot for the review UI
+  text: text("text").notNull(),
+  status: text("status").notNull().default("pending_review"),
+      // pending_review | approved | scheduled | posted | rejected | failed
+  scheduledAt: ts("scheduled_at"),
+  xPostId: text("x_post_id"),
+  postedAt: ts("posted_at"),
+  editedByHuman: boolean("edited_by_human").default(false),
+  rationale: text("rationale").default(""),            // why Claude chose this angle
+  mediaIdea: text("media_idea").default(""),           // suggested image/video — text-only posts underperform
+  createdAt: ts("created_at").defaultNow(),
+}, (t) => ({
+  statusIdx: index("xbot_drafts_status_idx").on(t.status),
+}));
+
+/** Append-only action ledger — the authoritative source for daily caps and rate budgets. */
+export const xbotActions = pgTable("xbot_actions", {
+  id: serial("id").primaryKey(),
+  kind: text("kind").notNull(),                        // like|reply|post|search|read_user|mine_seed
+  targetId: integer("target_id"),
+  tweetId: text("tweet_id"),
+  createdAt: ts("created_at").defaultNow(),
+}, (t) => ({
+  kindCreatedIdx: index("xbot_actions_kind_created_idx").on(t.kind, t.createdAt),
+}));
+
+/** Single-row XBot runtime config (id is always 1). Starts paused. */
+export const xbotSettings = pgTable("xbot_settings", {
+  id: integer("id").primaryKey().default(1),
+  paused: boolean("paused").notNull().default(true),
+  replyAutonomy: text("reply_autonomy").notNull().default("review"), // review | auto
+  postAutonomy: text("post_autonomy").notNull().default("review"),   // review | auto
+  likesAuto: boolean("likes_auto").notNull().default(true),
+  dailyReplyCap: integer("daily_reply_cap").notNull().default(20),   // method: 15-30/day
+  dailyLikeCap: integer("daily_like_cap").notNull().default(40),
+  dailyPostCap: integer("daily_post_cap").notNull().default(3),      // method: 3-5/day
+  dailyEngageCap: integer("daily_engage_cap").notNull().default(50), // engage-backs: reply to EVERYONE who comments
+  cooldownDays: integer("cooldown_days").notNull().default(3),       // min days between replies to same target
+  quietStartUtc: integer("quiet_start_utc").notNull().default(22),   // engage 14:00-22:00 UTC ≈ 9am-5pm EST
+  quietEndUtc: integer("quiet_end_utc").notNull().default(14),
+  maxFollowers: integer("max_followers").notNull().default(5000),    // method: target creators <5000 followers
+  keywords: text("keywords").notNull().default("[]"),                // JSON array; seeded from lib/xbot/config.ts
+  searchSinceId: text("search_since_id"),                            // recent-search cursor
+  mentionsSinceId: text("mentions_since_id"),                        // inbound-engagement (mentions) cursor
+  xbotUserId: text("xbot_user_id"),                                  // cached own X user id
+  voiceNotes: text("voice_notes").default(""),                       // user's voice/context injected into prompts
+  mission: text("mission").default(""),                              // public storyline, e.g. "0→$1k MRR"
+  productUrl: text("product_url").default(""),                       // linked in plug replies under traction posts
+  communityId: text("community_id").default(""),                     // X community to post into (small-account reach)
+  setupChecklist: text("setup_checklist").notNull().default("[]"),   // JSON array of completed playbook item ids
+  updatedAt: ts("updated_at").defaultNow(),
+});
+
 export type Candidate = typeof candidates.$inferSelect;
 export type NewCandidate = typeof candidates.$inferInsert;
 export type Clip = typeof clips.$inferSelect;
@@ -121,3 +243,11 @@ export type RunRow = typeof runs.$inferSelect;
 export type EventRow = typeof events.$inferSelect;
 export type Settings = typeof settings.$inferSelect;
 export type FigureRow = typeof figures.$inferSelect;
+export type XbotTarget = typeof xbotTargets.$inferSelect;
+export type NewXbotTarget = typeof xbotTargets.$inferInsert;
+export type XbotSeed = typeof xbotSeeds.$inferSelect;
+export type XbotTweet = typeof xbotTweets.$inferSelect;
+export type XbotDraft = typeof xbotDrafts.$inferSelect;
+export type NewXbotDraft = typeof xbotDrafts.$inferInsert;
+export type XbotAction = typeof xbotActions.$inferSelect;
+export type XbotSettings = typeof xbotSettings.$inferSelect;
