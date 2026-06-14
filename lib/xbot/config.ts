@@ -64,3 +64,14 @@ export const DUPLICATE_SIMILARITY = 0.8;
 /** Env-overridable pacing for discovery runs (Phase 3). */
 export const SEARCH_QUERIES_PER_RUN = Number(process.env.XBOT_SEARCH_QUERIES_PER_RUN ?? 3);
 export const SEARCH_MAX_RESULTS = Number(process.env.XBOT_SEARCH_MAX_RESULTS ?? 10);
+
+/** Outbound roster engagement (the "reply guy" loop): how many target timelines to read
+ *  per run. Timeline reads are the rate-limited part on X's Basic tier, so this caps the
+ *  expensive work; the daily reply cap + pacing still gate what actually gets posted. */
+export const OUTBOUND_TARGETS_PER_RUN = Number(process.env.XBOT_OUTBOUND_TARGETS_PER_RUN ?? 8);
+
+/** Only reply to a target's posts this fresh — a reply on a day-old tweet rarely gets seen. */
+export const OUTBOUND_TWEET_MAX_AGE_HOURS = Number(process.env.XBOT_OUTBOUND_MAX_AGE_HOURS ?? 24);
+
+/** How many recent tweets to pull per target timeline (X min is 5). */
+export const OUTBOUND_TIMELINE_PAGE = Number(process.env.XBOT_OUTBOUND_TIMELINE_PAGE ?? 10);

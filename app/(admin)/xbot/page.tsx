@@ -6,6 +6,7 @@ import { hasXbotWriteEnv } from "@/lib/xbot/env";
 import { TARGET_ROSTER_GOAL } from "@/lib/xbot/config";
 import { SETUP_ITEMS } from "@/lib/xbot/playbook";
 import XbotInboundButton from "@/components/XbotInboundButton";
+import XbotOutboundButton from "@/components/XbotOutboundButton";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +61,7 @@ export default async function XbotPage() {
         <Link href="/xbot/queue" className="rounded-md bg-white px-3 py-1.5 font-medium text-black hover:bg-neutral-200">
           Review queue {pending > 0 ? `(${pending})` : ""}
         </Link>
+        <XbotOutboundButton disabled={!hasCreds} />
         <XbotInboundButton disabled={!hasCreds} />
         <Link href="/xbot/targets" className="rounded-md border border-neutral-600 px-3 py-1.5 text-neutral-200 hover:bg-neutral-800">
           Manage targets
