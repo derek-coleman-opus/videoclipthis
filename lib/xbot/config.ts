@@ -25,6 +25,17 @@ export const MIN_FOLLOWERS = 50;
 /** Method: keep a roster of 40-50 niche creators you engage with regularly. */
 export const TARGET_ROSTER_GOAL = 40;
 
+/** Stop auto-discovering once the active roster reaches this — keeps it focused (and the
+ *  outbound loop able to actually cover everyone within the cooldown window). */
+export const TARGET_ROSTER_MAX = Number(process.env.XBOT_TARGET_ROSTER_MAX ?? 60);
+
+/** Discovery: minimum Claude account-quality score to auto-add a discovered account. */
+export const ACCOUNT_SCORE_THRESHOLD = Number(process.env.XBOT_ACCOUNT_SCORE_THRESHOLD ?? 65);
+
+/** Discovery per-run budgets (Claude cost + X search quota control). */
+export const DISCOVERY_SCORE_PER_RUN = Number(process.env.XBOT_DISCOVERY_SCORE_PER_RUN ?? 15);
+export const DISCOVERY_ADD_PER_RUN = Number(process.env.XBOT_DISCOVERY_ADD_PER_RUN ?? 8);
+
 /** Generic-praise phrases: a reply that is mostly these adds no value and trains
  *  followers (and the algorithm) to ignore the account. */
 export const LOW_VALUE_PHRASES = [

@@ -209,3 +209,50 @@ export async function draftPlugReply(opts: {
   }
   return { text, rationale: String(obj.rationale ?? "") };
 }
+
+const ACCOUNT_SCORE_PROMPT = `You decide whether an X account is worth adding to a builder's
+engagement roster — people they'll regularly reply to in order to grow. Score 0-100 on how
+good a target this account is, weighting:
+- niche fit: is their content in or adjacent to the builder's space (below)?
+- real person posting original content: a maker/builder/operator, NOT a brand, news feed,
+  reply-spam/growth-hack account, engagement-bait account, or bot.
+- conversational: they share their work, ask questions, and reply to people (a reply will
+  be seen and can start a relationship), vs. broadcast-only.
+- size sweet spot: small enough that a thoughtful reply gets noticed, active enough to matter.
+Be strict: most accounts should score below 60. Reserve 70+ for clearly on-niche real builders.
+Return JSON: {"score": <int 0-100>, "rationale": "<one short sentence: who they are + why>"}.`;
+
+export interface AccountScore {
+  score: number;
+  rationale: string;
+}
+
+/** Judge whether a discovered account belongs on the engagement roster. Used by the
+ *  autonomous discovery loop to gate auto-adding targets. */
+export async function scoreAccount(opts: {
+  handle: string;
+  bio?: string;
+  followers?: number;
+  following?: number;
+  sampleTweets?: string[];
+  voiceNotes?: string;
+  mission?: string;
+}): Promise<AccountScore> {
+  const user = [
+    `The builder's space (who they want to reach):\n${opts.voiceNotes || opts.mission || "indie builders / software & startups"}`,
+    `Candidate account: @${opts.handle}`,
+    opts.bio ? `Bio: ${opts.bio}` : "Bio: (none)",
+    `Followers: ${opts.followers ?? "unknown"} · Following: ${opts.following ?? "unknown"}`,
+    opts.sampleTweets?.length
+      ? `Recent posts:\n${opts.sampleTweets.map((t) => `- ${t.replace(/\s+/g, " ").slice(0, 200)}`).join("\n")}`
+      : "Recent posts: (none available)",
+  ].filter(Boolean).join("\n\n");
+
+  const raw = await callClaude(ACCOUNT_SCORE_PROMPT, user, 200);
+  const obj = parseJson(raw);
+  const score = Math.round(Number(obj.score));
+  return {
+    score: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0,
+    rationale: String(obj.rationale ?? ""),
+  };
+}

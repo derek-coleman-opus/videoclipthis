@@ -21,6 +21,7 @@ export default async function XbotTargetsPage() {
         bio: t.bio ?? "",
         followers: t.followers ?? 0,
         score: t.score,
+        rationale: t.rationale ?? "",
         source: t.source,
         status: t.status,
         repliesSent: t.repliesSent ?? 0,
