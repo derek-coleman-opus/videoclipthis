@@ -69,7 +69,8 @@ export function buildCurationPrompt(ctx: CurationContext = {}): string {
     `Find the single most engaging AND informative moment${what}${who} for an audience of AI engineers and developers on X (Twitter).`,
     `Prioritize, in order: (1) a bold or surprising claim, hot take, or strong opinion; (2) a new announcement, release, or number; (3) a live demo moment; (4) a sharp, quotable insight or framework the viewer can apply.`,
     `The clip must be fully self-contained: it starts at the beginning of a thought and ends at its natural conclusion — never cut mid-sentence and never depend on context the viewer hasn't seen.`,
-    `The first 2-3 seconds must work as a hook for someone scrolling a feed with sound off — a strong opening line, not a slow wind-up.`,
+    `The first 2-3 seconds must work as a hook for someone scrolling a feed with sound off — a strong spoken opening line, not a slow wind-up.`,
+    `Reject boring segments: skip stretches where the speaker is only reading slides, narrating a roadmap, or where nothing surprising is said. The chosen moment must stand on the strength of what is SPOKEN, not the visuals (the source is often just slides or a whiteboard).`,
     `Avoid: intros, speaker introductions, thank-yous, audience Q&A logistics, sponsor reads, and generic high-level summaries.`,
     `Format for X: vertical 9:16, with accurate burned-in captions (most viewers watch muted), 30-90 seconds long.`,
   ].join(" ");
@@ -79,8 +80,12 @@ export function buildCurationPrompt(ctx: CurationContext = {}): string {
  *  (github.com/opus-pro/opus-skills): clipDurations is an array of [min,max] second ranges,
  *  layoutAspectRatio is portrait|landscape|square (NOT "9:16"). Shared with the debug probe so
  *  the two never drift. */
-export function buildCreateProjectBody(videoUrl: string, ctx: CurationContext = {}): Record<string, unknown> {
-  return {
+export function buildCreateProjectBody(
+  videoUrl: string,
+  ctx: CurationContext = {},
+  brandTemplateId?: string | null,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
     videoUrl,
     curationPref: {
       // ClipAnything = the multimodal model; customPrompt is honored only on ClipAnything.
@@ -94,6 +99,10 @@ export function buildCreateProjectBody(videoUrl: string, ctx: CurationContext = 
       quickstartConfig: { enableRemoveFillerWords: true },
     },
   };
+  // A brand template (configured in the OpusClip dashboard) drives the vertical layout + caption
+  // style — the reliable way to make slide-heavy talks fit the frame instead of cropping.
+  if (brandTemplateId) body.brandTemplateId = brandTemplateId;
+  return body;
 }
 
 /** Submit a long video for clipping; returns the project id (rendering continues server-side). */
@@ -102,8 +111,9 @@ export async function opusclipCreateProject(
   apiKey: string,
   base: string,
   ctx: CurationContext = {},
+  brandTemplateId?: string | null,
 ): Promise<string> {
-  const data = await opusFetch("POST", "/api/clip-projects", apiKey, base, buildCreateProjectBody(videoUrl, ctx));
+  const data = await opusFetch("POST", "/api/clip-projects", apiKey, base, buildCreateProjectBody(videoUrl, ctx, brandTemplateId));
   const proj = data.data ?? data.project ?? data;
   const id = String(proj?.id ?? proj?.projectId ?? "");
   if (!id) throw new Error(`OpusClip: no project id in create response: ${JSON.stringify(data).slice(0, 300)}`);

@@ -96,6 +96,7 @@ export const settings = pgTable("settings", {
   autonomy: text("autonomy").notNull().default("review"), // review|assisted|auto
   niche: text("niche").notNull().default("AI / developer tooling"), // audience the scorer ranks for
   watchChannels: text("watch_channels").notNull().default(""), // "Name | handle" per line; "" → code WATCHLIST
+  opusBrandTemplateId: text("opus_brand_template_id"), // OpusClip template: vertical layout + caption style
   summonSinceId: text("summon_since_id"),                 // last @mention id processed (Summon poll cursor)
   xBotUserId: text("x_bot_user_id"),                      // cached id of the bot's own X account
   figureSearchAt: ts("figure_search_at"),                 // last figure-search run (quota throttle)

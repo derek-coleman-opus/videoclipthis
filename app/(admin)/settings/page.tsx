@@ -18,6 +18,7 @@ export default async function SettingsPage() {
         initial={{
           paused: cfg.paused, threshold: cfg.threshold, autonomy: cfg.autonomy,
           niche: cfg.niche ?? "", watchChannels: cfg.watchChannels ?? "",
+          opusBrandTemplateId: cfg.opusBrandTemplateId ?? "",
         }}
       />
       <p className="mt-6 max-w-md text-xs leading-relaxed text-neutral-500">

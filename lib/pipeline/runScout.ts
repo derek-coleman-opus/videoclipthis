@@ -86,7 +86,7 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
     try {
       const projectId = await opusclipCreateProject(c.url, opusKey, opusBase, {
         title: c.title, speaker: c.speaker || c.figureName || undefined, channel: c.channel || undefined,
-      });
+      }, cfg.opusBrandTemplateId);
       await database.update(candidates)
         .set({ status: "rendering", opusProjectId: projectId })
         .where(eq(candidates.id, c.id));

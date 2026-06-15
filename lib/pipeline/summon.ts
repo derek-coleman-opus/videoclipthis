@@ -68,7 +68,7 @@ export async function runSummon(): Promise<SummonResult> {
 
     // A human asked, so we skip the relevance gate: straight to render submission.
     try {
-      const projectId = await opusclipCreateProject(m.targetUrl, opusKey, opusBase, {});
+      const projectId = await opusclipCreateProject(m.targetUrl, opusKey, opusBase, {}, cfg.opusBrandTemplateId);
       await database.update(candidates)
         .set({ status: "rendering", opusProjectId: projectId })
         .where(eq(candidates.id, cand.id));

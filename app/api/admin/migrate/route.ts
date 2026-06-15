@@ -15,6 +15,7 @@ const STATEMENTS: string[] = [
   // settings: niche + watch-channels (NOT NULL with defaults so existing rows backfill cleanly)
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "niche" text NOT NULL DEFAULT 'AI / developer tooling'`,
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "watch_channels" text NOT NULL DEFAULT ''`,
+  `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "opus_brand_template_id" text`,
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "summon_since_id" text`,
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "x_bot_user_id" text`,
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "figure_search_at" timestamp with time zone`,

@@ -57,6 +57,13 @@
       "when": 1781284571368,
       "tag": "0007_stormy_tenebrous",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781552788795,
+      "tag": "0008_freezing_rhodey",
+      "breakpoints": true
     }
   ]
 }
