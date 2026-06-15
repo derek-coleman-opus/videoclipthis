@@ -75,6 +75,27 @@ export function buildCurationPrompt(ctx: CurationContext = {}): string {
   ].join(" ");
 }
 
+/** The exact POST /api/clip-projects body. Field shapes verified against OpusClip's own CLI
+ *  (github.com/opus-pro/opus-skills): clipDurations is an array of [min,max] second ranges,
+ *  layoutAspectRatio is portrait|landscape|square (NOT "9:16"). Shared with the debug probe so
+ *  the two never drift. */
+export function buildCreateProjectBody(videoUrl: string, ctx: CurationContext = {}): Record<string, unknown> {
+  return {
+    videoUrl,
+    curationPref: {
+      // ClipAnything = the multimodal model; customPrompt is honored only on ClipAnything.
+      model: "ClipAnything",
+      // [min,max] second ranges — keep clips in the X-friendly 20–90s band.
+      clipDurations: [[20, 90]],
+      customPrompt: buildCurationPrompt(ctx),
+    },
+    renderPref: {
+      layoutAspectRatio: "portrait", // 9:16 vertical
+      quickstartConfig: { enableRemoveFillerWords: true },
+    },
+  };
+}
+
 /** Submit a long video for clipping; returns the project id (rendering continues server-side). */
 export async function opusclipCreateProject(
   videoUrl: string,
@@ -82,22 +103,7 @@ export async function opusclipCreateProject(
   base: string,
   ctx: CurationContext = {},
 ): Promise<string> {
-  const data = await opusFetch("POST", "/api/clip-projects", apiKey, base, {
-    videoUrl,
-    // ClipAnything = the multimodal curation model (vs ClipBasic for plain talking heads).
-    // TODO-CONFIRM the exact enum value against the OpenAPI spec; drop `model` for the org default.
-    curationPref: {
-      model: "ClipAnything",
-      clipDurations: [30, 60, 90],
-      customPrompt: buildCurationPrompt(ctx),
-    },
-    // TODO-CONFIRM the layoutAspectRatio enum (e.g. "9:16" vs a named value).
-    renderPref: {
-      layoutAspectRatio: "9:16",
-      // Tighter clips read better on X; documented quickstart option.
-      quickstartConfig: { enableRemoveFillerWords: true },
-    },
-  });
+  const data = await opusFetch("POST", "/api/clip-projects", apiKey, base, buildCreateProjectBody(videoUrl, ctx));
   const proj = data.data ?? data.project ?? data;
   const id = String(proj?.id ?? proj?.projectId ?? "");
   if (!id) throw new Error(`OpusClip: no project id in create response: ${JSON.stringify(data).slice(0, 300)}`);
@@ -109,22 +115,25 @@ function asArray(data: any): any[] {
   return data?.data?.list ?? (Array.isArray(data?.data) ? data.data : null) ?? data?.clips ?? data?.list ?? [];
 }
 
+// Field names verified against OpusClip's CLI clip schema: the rendered MP4 is `uriForExport`,
+// and a clip is still rendering when `renderAsVideoFile.pending === true` (NOT a top-level
+// `render_pending`). durationMs is the clip length; source start/end isn't exposed, and we post
+// the rendered file (not a time range), so start/end are cosmetic — derive from duration.
 function normalizeClip(c: any): OpusClipResult {
   const durationS = c.durationMs != null ? Number(c.durationMs) / 1000 : Number(c.duration_sec ?? c.durationSec ?? 0);
-  const startS = c.startMs != null ? Number(c.startMs) / 1000 : Number(c.start_sec ?? c.startSec ?? 0);
   return {
-    startS,
-    endS: c.endMs != null ? Number(c.endMs) / 1000 : startS + durationS,
-    score: Number(c.score ?? c.judgeResult?.score ?? 0),
+    startS: 0,
+    endS: durationS,
+    score: Number(c.score ?? c.judgeResult?.hookScore ?? 0),
     caption: String(c.title ?? c.description ?? ""),
-    clipUrl: String(c.uriForExport ?? c.export_url ?? c.exportUrl ?? c.downloadUrl ?? c.preview_url ?? ""),
+    clipUrl: String(c.uriForExport ?? c.export_url ?? ""),
     costUsd: 0,
-    renderPending: Boolean(c.render_pending ?? c.renderPending ?? false),
+    renderPending: Boolean(c.renderAsVideoFile?.pending ?? false),
   };
 }
 
 /** One status check on a project's exportable clips (may be empty/partial mid-render).
- *  `done` = at least one clip exists and every returned clip has finished rendering. */
+ *  `done` = at least one clip has finished rendering (has a usable export URL, not pending). */
 export async function opusclipFetchClips(
   projectId: string,
   apiKey: string,
@@ -137,6 +146,6 @@ export async function opusclipFetchClips(
     base,
   );
   const clips = asArray(data).map(normalizeClip);
-  const done = clips.length > 0 && clips.every((c) => c.clipUrl && !c.renderPending);
+  const done = clips.some((c) => c.clipUrl && !c.renderPending);
   return { clips, done };
 }

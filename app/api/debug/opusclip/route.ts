@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildCurationPrompt } from "@/lib/pipeline/opusclip";
+import { buildCreateProjectBody } from "@/lib/pipeline/opusclip";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -65,18 +65,7 @@ export async function GET(req: NextRequest) {
   }
 
   // 2. Create a project with the EXACT production payload.
-  const payload = {
-    videoUrl: video,
-    curationPref: {
-      model: "ClipAnything",
-      clipDurations: [30, 60, 90],
-      customPrompt: buildCurationPrompt({ title: "probe run" }),
-    },
-    renderPref: {
-      layoutAspectRatio: "9:16",
-      quickstartConfig: { enableRemoveFillerWords: true },
-    },
-  };
+  const payload = buildCreateProjectBody(video, { title: "probe run" });
   steps.push({ step: "POST /api/clip-projects payload", status: 0, body: payload });
   const created = await call("POST", "/api/clip-projects", payload);
   steps.push({ step: "POST /api/clip-projects response", ...created });
