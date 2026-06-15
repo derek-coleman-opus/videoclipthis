@@ -1,10 +1,11 @@
--- XBot schema bootstrap — combines drizzle migrations 0004 + 0005 + 0006.
+-- Schema bootstrap — combines drizzle migrations 0004 + 0005 + 0006 + 0007.
 -- Written as ONE statement (a single DO block) so it works in hosted SQL consoles
 -- like the Neon SQL editor, which send input as a single prepared statement and
 -- reject multi-command scripts ("cannot insert multiple commands into a prepared
 -- statement"). Idempotent: safe to run repeatedly and safe on a database where
 -- any subset of these migrations was already applied.
--- Touches ONLY xbot_* tables; the clip-bot tables are not affected.
+-- Creates the xbot_* tables and adds the two configurable-niche columns to the
+-- existing clip-bot "settings" table; nothing else is touched.
 
 DO $$
 BEGIN
