@@ -213,13 +213,17 @@ export async function draftPlugReply(opts: {
 const ACCOUNT_SCORE_PROMPT = `You decide whether an X account is worth adding to a builder's
 engagement roster — people they'll regularly reply to in order to grow. Score 0-100 on how
 good a target this account is, weighting:
-- niche fit: is their content in or adjacent to the builder's space (below)?
-- real person posting original content: a maker/builder/operator, NOT a brand, news feed,
-  reply-spam/growth-hack account, engagement-bait account, or bot.
+- niche fit: is their content in or adjacent to the builder's space (below)? Adjacent counts.
+- real person posting original content: a maker/builder/operator/creator, NOT a brand,
+  news feed, reply-spam/growth-hack account, engagement-bait account, or bot.
 - conversational: they share their work, ask questions, and reply to people (a reply will
   be seen and can start a relationship), vs. broadcast-only.
-- size sweet spot: small enough that a thoughtful reply gets noticed, active enough to matter.
-Be strict: most accounts should score below 60. Reserve 70+ for clearly on-niche real builders.
+Scoring guide (be selective, not harsh — we want a healthy roster, not perfection):
+- 60-100: a real person whose content is on- or adjacent-to niche and who could plausibly
+  engage back. Most genuine builders/creators in the space belong here.
+- 40-59: real person but only loosely related, or thin/unclear signal.
+- 0-39: brand/company, news/aggregator, bot, engagement-bait/growth-hack, or clearly off-niche.
+When the signal is genuine-builder-in-the-space, lean toward including them.
 Return JSON: {"score": <int 0-100>, "rationale": "<one short sentence: who they are + why>"}.`;
 
 export interface AccountScore {

@@ -30,11 +30,11 @@ export const TARGET_ROSTER_GOAL = 40;
 export const TARGET_ROSTER_MAX = Number(process.env.XBOT_TARGET_ROSTER_MAX ?? 60);
 
 /** Discovery: minimum Claude account-quality score to auto-add a discovered account. */
-export const ACCOUNT_SCORE_THRESHOLD = Number(process.env.XBOT_ACCOUNT_SCORE_THRESHOLD ?? 65);
+export const ACCOUNT_SCORE_THRESHOLD = Number(process.env.XBOT_ACCOUNT_SCORE_THRESHOLD ?? 58);
 
 /** Discovery per-run budgets (Claude cost + X search quota control). */
-export const DISCOVERY_SCORE_PER_RUN = Number(process.env.XBOT_DISCOVERY_SCORE_PER_RUN ?? 15);
-export const DISCOVERY_ADD_PER_RUN = Number(process.env.XBOT_DISCOVERY_ADD_PER_RUN ?? 8);
+export const DISCOVERY_SCORE_PER_RUN = Number(process.env.XBOT_DISCOVERY_SCORE_PER_RUN ?? 40);
+export const DISCOVERY_ADD_PER_RUN = Number(process.env.XBOT_DISCOVERY_ADD_PER_RUN ?? 20);
 
 /** Generic-praise phrases: a reply that is mostly these adds no value and trains
  *  followers (and the algorithm) to ignore the account. */
@@ -73,8 +73,8 @@ export const DUPLICATE_LOOKBACK = 50;
 export const DUPLICATE_SIMILARITY = 0.8;
 
 /** Env-overridable pacing for discovery runs (Phase 3). */
-export const SEARCH_QUERIES_PER_RUN = Number(process.env.XBOT_SEARCH_QUERIES_PER_RUN ?? 3);
-export const SEARCH_MAX_RESULTS = Number(process.env.XBOT_SEARCH_MAX_RESULTS ?? 10);
+export const SEARCH_QUERIES_PER_RUN = Number(process.env.XBOT_SEARCH_QUERIES_PER_RUN ?? 5);
+export const SEARCH_MAX_RESULTS = Number(process.env.XBOT_SEARCH_MAX_RESULTS ?? 30);
 
 /** Outbound roster engagement (the "reply guy" loop): how many target timelines to read
  *  per run. Timeline reads are the rate-limited part on X's Basic tier, so this caps the
