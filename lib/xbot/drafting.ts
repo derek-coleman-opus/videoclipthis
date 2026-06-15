@@ -92,9 +92,40 @@ async function callClaude(system: string, user: string, maxTokens = 500): Promis
   return (data.content ?? []).map((b: any) => b.text ?? "").join("");
 }
 
+/** Escape raw control characters (newlines, tabs) that appear INSIDE JSON string values.
+ *  Claude routinely emits literal line breaks inside multi-line post text, which strict
+ *  JSON.parse rejects ("Expected ',' or '}'..."). We only touch chars inside strings, so
+ *  structural whitespace between tokens is left alone. */
+function escapeControlCharsInStrings(s: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (const ch of s) {
+    if (escaped) { out += ch; escaped = false; continue; }
+    if (ch === "\\") { out += ch; escaped = true; continue; }
+    if (ch === '"') { inString = !inString; out += ch; continue; }
+    if (inString) {
+      if (ch === "\n") { out += "\\n"; continue; }
+      if (ch === "\r") { out += "\\r"; continue; }
+      if (ch === "\t") { out += "\\t"; continue; }
+      const code = ch.charCodeAt(0);
+      if (code < 0x20) { out += "\\u" + code.toString(16).padStart(4, "0"); continue; }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/** Parse the JSON object out of an LLM response. Tolerates the most common defect —
+ *  unescaped newlines inside string values (multi-line post drafts) — before giving up. */
 function parseJson(text: string): any {
   const match = text.match(/\{[\s\S]*\}/);
-  return JSON.parse(match ? match[0] : text);
+  const raw = match ? match[0] : text;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return JSON.parse(escapeControlCharsInStrings(raw));
+  }
 }
 
 function cleanDraft(raw: unknown): string {
