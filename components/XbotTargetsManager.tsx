@@ -10,6 +10,7 @@ type TargetRow = {
   bio: string;
   followers: number;
   score: number | null;
+  rationale: string;
   source: string;
   status: string;
   repliesSent: number;
@@ -103,7 +104,9 @@ export default function XbotTargetsManager({ targets, seeds }: { targets: Target
       <section>
         <h3 className="mb-2 text-sm font-medium text-neutral-400">Targets ({targets.length})</h3>
         <p className="mb-3 text-xs text-neutral-500">
-          Builders to engage with. Add manually now; keyword/seed discovery fills this automatically once the X API is connected.
+          Builders to engage with. Add manually here, or let <b>Discover targets</b> (XBot dashboard / 6-hourly cron)
+          search your niche keywords and auto-add good creators as <b>candidate</b>s — hover a Score to see why one was added.
+          The outbound loop engages candidates and active targets alike; <b>keep</b> a good one or <b>archive</b> a bad one.
         </p>
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <input className={`${input} w-36`} placeholder="@handle" value={handle} onChange={(e) => setHandle(e.target.value)} />
@@ -143,20 +146,33 @@ export default function XbotTargetsManager({ targets, seeds }: { targets: Target
                   </td>
                   <td className="max-w-xs truncate p-2 text-neutral-400" title={t.bio}>{t.bio || "—"}</td>
                   <td className="p-2">{t.followers || "—"}</td>
-                  <td className="p-2">{t.score ?? "—"}</td>
+                  <td className="p-2" title={t.rationale || undefined}>
+                    {t.score ?? "—"}
+                    {t.rationale && <span className="ml-1 cursor-help text-neutral-600">ⓘ</span>}
+                  </td>
                   <td className="p-2 text-neutral-400">{t.source}</td>
-                  <td className="p-2">{t.status}</td>
+                  <td className="p-2">
+                    {t.status}
+                    {t.status === "candidate" && <span className="ml-1 text-xs text-amber-400" title="auto-discovered, not yet vetted">•</span>}
+                  </td>
                   <td className="p-2">{t.repliesSent}</td>
                   <td className="p-2 text-right">
-                    {t.status !== "archived" ? (
-                      <button onClick={() => setStatus(t.id, "archived")} disabled={busy} className="text-xs text-neutral-500 hover:text-red-400 disabled:opacity-50">
-                        archive
-                      </button>
-                    ) : (
-                      <button onClick={() => setStatus(t.id, "active")} disabled={busy} className="text-xs text-neutral-500 hover:text-green-400 disabled:opacity-50">
-                        restore
-                      </button>
-                    )}
+                    <span className="flex justify-end gap-2">
+                      {t.status === "candidate" && (
+                        <button onClick={() => setStatus(t.id, "active")} disabled={busy} className="text-xs text-neutral-500 hover:text-green-400 disabled:opacity-50" title="vet & keep on the roster">
+                          keep
+                        </button>
+                      )}
+                      {t.status !== "archived" ? (
+                        <button onClick={() => setStatus(t.id, "archived")} disabled={busy} className="text-xs text-neutral-500 hover:text-red-400 disabled:opacity-50">
+                          archive
+                        </button>
+                      ) : (
+                        <button onClick={() => setStatus(t.id, "active")} disabled={busy} className="text-xs text-neutral-500 hover:text-green-400 disabled:opacity-50">
+                          restore
+                        </button>
+                      )}
+                    </span>
                   </td>
                 </tr>
               ))}

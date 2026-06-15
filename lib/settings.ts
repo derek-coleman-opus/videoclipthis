@@ -11,7 +11,10 @@ export async function getSettings(): Promise<Settings> {
 }
 
 export async function updateSettings(
-  patch: Partial<{ paused: boolean; threshold: number; autonomy: string }>,
+  patch: Partial<{
+    paused: boolean; threshold: number; autonomy: string;
+    niche: string; watchChannels: string;
+  }>,
 ): Promise<Settings> {
   const database = db();
   await getSettings(); // ensure the row exists
@@ -21,6 +24,21 @@ export async function updateSettings(
     .where(eq(settings.id, 1))
     .returning();
   return updated;
+}
+
+/** Parse the admin "Watched channels" field: one channel per line as
+ *  "Name | youtubeHandle" (handle optional — names cost 100 YouTube quota units to
+ *  resolve vs 1 for handles). Empty result means "use the code WATCHLIST defaults". */
+export function parseWatchChannels(s: Settings): { name: string; handle?: string }[] {
+  return (s.watchChannels ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [name, handle] = line.split("|").map((p) => p.trim());
+      return handle ? { name, handle } : { name };
+    })
+    .filter((c) => c.name);
 }
 
 /** Persist pipeline state (Summon poll cursor, cached bot user id, figure-search throttle). */
