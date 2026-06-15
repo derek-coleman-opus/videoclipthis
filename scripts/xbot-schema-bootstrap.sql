@@ -140,6 +140,11 @@ BEGIN
   ALTER TABLE "xbot_settings" ADD COLUMN IF NOT EXISTS "daily_engage_cap" integer DEFAULT 50 NOT NULL;
   ALTER TABLE "xbot_settings" ADD COLUMN IF NOT EXISTS "mentions_since_id" text;
 
+  -- ── 0007: configurable niche for the clip bot (open-source restructure) ──
+  -- "settings" is the original clip-bot config table; these are additive.
+  ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "niche" text DEFAULT 'AI / developer tooling' NOT NULL;
+  ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "watch_channels" text DEFAULT '' NOT NULL;
+
   -- Adopt the new pacing on a pre-existing settings row, only where the old
   -- Phase 1 defaults were never edited:
   UPDATE "xbot_settings" SET "daily_post_cap" = 3 WHERE "id" = 1 AND "daily_post_cap" = 2;
