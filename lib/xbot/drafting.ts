@@ -9,6 +9,23 @@ export interface Drafted {
   mediaIdea?: string;
 }
 
+/** Reviewer-selectable voice for a draft. "auto" lets the model pick the best lane. */
+export type DraftStyle = "auto" | "funny" | "informative" | "contrarian";
+
+/** Extra instruction appended when the reviewer regenerates a draft in a specific style. */
+function styleDirective(style?: DraftStyle): string {
+  switch (style) {
+    case "funny":
+      return "CHOSEN STYLE: funny — a witty, specific observation about their exact situation; land the joke, never corny or a generic one-liner.";
+    case "informative":
+      return "CHOSEN STYLE: informative — lead with one concrete, genuinely useful insight, tip, or sharp specific question that helps them.";
+    case "contrarian":
+      return "CHOSEN STYLE: contrarian — a civil but sharp counter-take or pushback a builder would respect.";
+    default:
+      return "";
+  }
+}
+
 const REPLY_PROMPT = `You write replies for a real engineer who is building in public on X.
 Every reply must EARN its place in the thread by being exactly one of:
 - FUNNY: an actually-funny observation about the specific situation (not a joke format),
@@ -123,6 +140,7 @@ export interface ReplyContext {
   mission?: string;      // public storyline (e.g. "0→$1k MRR") — colors the voice
   priorReply?: string;   // set for follow-ups: what we said to them last time
   priorTweet?: string;   // ...and what they had posted then
+  style?: DraftStyle;    // reviewer-chosen voice when regenerating
 }
 
 /** Draft one reply (or follow-up) to a specific tweet. */
@@ -136,6 +154,7 @@ export async function draftReply(ctx: ReplyContext): Promise<Drafted> {
     ctx.voiceNotes ? `About you (the replier):\n${ctx.voiceNotes}` : "",
     ctx.mission ? `Your public mission/storyline: ${ctx.mission}` : "",
     isFollowup ? `Prior interaction — their tweet then: ${ctx.priorTweet ?? ""}\nYour reply then: ${ctx.priorReply}` : "",
+    styleDirective(ctx.style),
     avoid.length ? `Do not reuse phrasings from your recent replies:\n${avoid.map((t) => `- ${t}`).join("\n")}` : "",
   ].filter(Boolean).join("\n\n");
 
@@ -145,11 +164,12 @@ export async function draftReply(ctx: ReplyContext): Promise<Drafted> {
 }
 
 /** Draft original-post variants ("open with a number or a take") plus a media idea each. */
-export async function draftPostVariants(voiceNotes: string, mission = ""): Promise<Drafted[]> {
+export async function draftPostVariants(voiceNotes: string, mission = "", style?: DraftStyle): Promise<Drafted[]> {
   const recentPosts = await recentDraftTexts(["post"]);
   const user = [
     mission ? `Public mission/storyline these posts document: ${mission}` : "",
     `Author context (what you're building, recent milestones, real metrics):\n${voiceNotes || "(none provided — lean on takes, not numbers)"}`,
+    styleDirective(style),
     recentPosts.length ? `Avoid repeating themes/phrasings from recent posts:\n${recentPosts.map((t) => `- ${t}`).join("\n")}` : "",
   ].filter(Boolean).join("\n\n");
 
@@ -171,6 +191,7 @@ export async function draftEngageBack(opts: {
   ourText?: string;      // what of ours they were responding to, when known
   voiceNotes?: string;
   mission?: string;
+  style?: DraftStyle;
 }): Promise<Drafted> {
   const avoid = await recentDraftTexts(["engage"]);
   const user = [
@@ -179,6 +200,7 @@ export async function draftEngageBack(opts: {
     `Their comment:\n${opts.theirText}`,
     opts.voiceNotes ? `About you:\n${opts.voiceNotes}` : "",
     opts.mission ? `Your public mission/storyline: ${opts.mission}` : "",
+    styleDirective(opts.style),
     avoid.length ? `Do not reuse phrasings from your recent engage-backs:\n${avoid.map((t) => `- ${t}`).join("\n")}` : "",
   ].filter(Boolean).join("\n\n");
 
