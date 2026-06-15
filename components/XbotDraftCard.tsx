@@ -16,9 +16,19 @@ type Draft = {
 
 const MAX_CHARS = 270;
 
+const STYLES = [
+  { value: "auto", label: "Auto" },
+  { value: "funny", label: "Funny" },
+  { value: "informative", label: "Informative" },
+  { value: "contrarian", label: "Contrarian" },
+];
+
 export default function XbotDraftCard({ draft }: { draft: Draft }) {
   const router = useRouter();
   const [text, setText] = useState(draft.text);
+  const [rationale, setRationale] = useState(draft.rationale);
+  const [mediaIdea, setMediaIdea] = useState(draft.mediaIdea ?? "");
+  const [style, setStyle] = useState("auto");
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -40,6 +50,31 @@ export default function XbotDraftCard({ draft }: { draft: Draft }) {
         setNote(json.note);
       }
       router.refresh();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function regenerate() {
+    setBusy("regenerate");
+    setErr(null);
+    setNote(null);
+    try {
+      const res = await fetch("/api/xbot/drafts/regenerate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: draft.id, style }),
+      });
+      const json = await res.json();
+      if (!json.ok) {
+        setErr(json.error ?? "failed");
+        return;
+      }
+      setText(json.draft.text);
+      setRationale(json.draft.rationale ?? "");
+      setMediaIdea(json.draft.mediaIdea ?? "");
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -73,18 +108,18 @@ export default function XbotDraftCard({ draft }: { draft: Draft }) {
         rows={3}
         className="w-full rounded bg-neutral-800 p-2 text-sm"
       />
-      {draft.mediaIdea && (
+      {mediaIdea && (
         <p className="mt-1 text-xs text-amber-300">
-          📸 Attach media when posting (text-only underperforms): {draft.mediaIdea}
+          📸 Attach media when posting (text-only underperforms): {mediaIdea}
         </p>
       )}
       <div className="mt-1 flex items-center justify-between">
         <span className={`text-xs ${over ? "text-red-400" : "text-neutral-500"}`}>
           {text.length}/{MAX_CHARS}
         </span>
-        {draft.rationale && <span className="max-w-md truncate text-xs text-neutral-600" title={draft.rationale}>{draft.rationale}</span>}
+        {rationale && <span className="max-w-md truncate text-xs text-neutral-600" title={rationale}>{rationale}</span>}
       </div>
-      <div className="mt-2 flex items-center gap-2">
+      <div className="mt-2 flex flex-wrap items-center gap-2">
         <button
           onClick={() => act("approve")} disabled={!!busy || over || !text.trim()}
           className="rounded bg-green-700 px-2 py-0.5 text-xs text-white hover:bg-green-600 disabled:opacity-50"
@@ -97,6 +132,22 @@ export default function XbotDraftCard({ draft }: { draft: Draft }) {
         >
           {busy === "reject" ? "…" : "Reject"}
         </button>
+        <span className="ml-2 flex items-center gap-1 border-l border-neutral-800 pl-2">
+          <select
+            value={style} onChange={(e) => setStyle(e.target.value)} disabled={!!busy}
+            className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200 disabled:opacity-50"
+            title="Voice for the regenerated draft"
+          >
+            {STYLES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+          <button
+            onClick={regenerate} disabled={!!busy}
+            className="rounded border border-neutral-600 px-2 py-0.5 text-xs text-neutral-200 hover:bg-neutral-800 disabled:opacity-50"
+            title="Re-draft this for the same tweet in the chosen style"
+          >
+            {busy === "regenerate" ? "Regenerating…" : "↻ Regenerate"}
+          </button>
+        </span>
         {err && <span className="text-xs text-red-400">{err}</span>}
         {note && <span className="text-xs text-amber-300">{note}</span>}
       </div>
