@@ -27,3 +27,8 @@ export const MAX_AGE_HOURS = Number(process.env.MAX_AGE_HOURS ?? 168);
 /** YouTube search.list costs 100 quota units per call, so figure searches (one per tracked
  *  figure) burn quota fast at a 30-min scout cadence. Only run them every N hours. */
 export const FIGURE_SEARCH_INTERVAL_H = Number(process.env.FIGURE_SEARCH_INTERVAL_H ?? 6);
+
+/** OpusClip caps CONCURRENT projects per plan (Pro Beta = 4). Submitting past the cap fails the
+ *  create call, so we keep in-flight renders at or below this and queue the rest. Stay a notch
+ *  under the plan cap to leave headroom for Summon renders (shared concurrency budget). */
+export const MAX_CONCURRENT_RENDERS = Number(process.env.MAX_CONCURRENT_RENDERS ?? 3);

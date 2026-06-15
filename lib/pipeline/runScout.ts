@@ -1,7 +1,7 @@
-import { eq } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db, candidates, runs } from "@/lib/db";
 import { getSettings, parseWatchChannels, updateSummonState } from "@/lib/settings";
-import { DEFAULT_THRESHOLD, MAX_CLIPS_PER_RUN, FIGURE_SEARCH_INTERVAL_H } from "./config";
+import { DEFAULT_THRESHOLD, MAX_CONCURRENT_RENDERS, FIGURE_SEARCH_INTERVAL_H } from "./config";
 import { requireScoutEnv } from "./env";
 import { slog } from "./util";
 import { buildSources } from "./sources";
@@ -20,6 +20,7 @@ export interface ScoutResult {
   runId: number;
   found: number;
   rendering: number;
+  queued: number;
   collected: number;
   skipped: number;
   paused?: boolean;
@@ -44,7 +45,7 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       .set({ finishedAt: new Date(), errors: "paused" })
       .where(eq(runs.id, run.id));
     await logEvent("run", "Scout skipped — paused");
-    return { runId: run.id, found: 0, rendering: 0, collected: 0, skipped: 0, paused: true };
+    return { runId: run.id, found: 0, rendering: 0, queued: 0, collected: 0, skipped: 0, paused: true };
   }
 
   // Phase B first: collect any renders that finished since the last run (clips queue/post here).
@@ -64,10 +65,50 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   const opusKey = process.env.OPUSCLIP_API_KEY ?? "";
   const opusBase = process.env.OPUSCLIP_API_BASE ?? "";
   const threshold = cfg.threshold ?? DEFAULT_THRESHOLD;
-  slog("scout_start", { threshold, collected: collect.collected });
 
-  let found = 0, rendering = 0, skipped = 0;
-  let capped = false;
+  let found = 0, rendering = 0, queued = 0, skipped = 0;
+
+  // Render backpressure: OpusClip caps concurrent projects, so only submit up to the number of
+  // free slots. Candidates that pass the gate but can't fit are left "scored" and submitted on a
+  // later run (drained newest-best-first below) — never over-submitted and burned.
+  const inFlight = Number(
+    (await database.select({ n: sql<number>`count(*)::int` })
+      .from(candidates).where(eq(candidates.status, "rendering")))[0]?.n ?? 0,
+  );
+  let slots = Math.max(0, MAX_CONCURRENT_RENDERS - inFlight);
+  slog("scout_start", { threshold, collected: collect.collected, inFlight, slots });
+
+  /** Submit one candidate's render; consumes a slot on success, marks failed on error. */
+  async function submitRender(c: {
+    id: number; url: string; title: string;
+    speaker?: string | null; figureName?: string | null; channel?: string | null; score?: number | null;
+  }): Promise<void> {
+    try {
+      const projectId = await opusclipCreateProject(c.url, opusKey, opusBase, {
+        title: c.title, speaker: c.speaker || c.figureName || undefined, channel: c.channel || undefined,
+      });
+      await database.update(candidates)
+        .set({ status: "rendering", opusProjectId: projectId })
+        .where(eq(candidates.id, c.id));
+      rendering++; slots--;
+      await logEvent("rendering", `Rendering [${c.score ?? "?"}]: ${c.title} (OpusClip ${projectId})`, "candidates", c.id);
+    } catch (e) {
+      await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, c.id));
+      await logEvent("error", `Failed on "${c.title}": ${(e as Error).message}`, "candidates", c.id);
+    }
+  }
+
+  // Drain the backlog first: candidates that passed the gate on a prior run but waited for a slot.
+  if (slots > 0) {
+    const backlog = await database.select().from(candidates)
+      .where(and(eq(candidates.status, "scored"), isNull(candidates.opusProjectId), sql`${candidates.score} >= ${threshold}`))
+      .orderBy(desc(candidates.score))
+      .limit(slots);
+    for (const c of backlog) {
+      if (slots <= 0) break;
+      await submitRender(c);
+    }
+  }
 
   for (const src of sources) {
     let detected;
@@ -136,36 +177,30 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
         skipped++; continue;
       }
 
-      // Volume cap on new render submissions per run.
-      if (rendering >= MAX_CLIPS_PER_RUN) {
-        await logEvent("run", `Cap reached (${rendering} renders submitted) — stopping run early.`);
-        capped = true;
-        break;
+      // Submit only if OpusClip has a free concurrency slot; otherwise leave the candidate
+      // "scored" (already set above) so a later run drains it from the backlog.
+      if (slots > 0) {
+        await submitRender({
+          id: cand.id, url: d.url, title: d.title,
+          speaker: d.speaker, figureName: d.figureName, channel: d.channel, score,
+        });
+      } else {
+        queued++;
+        await logEvent("scored", `Queued [${score}] — ${MAX_CONCURRENT_RENDERS} renders already in flight: ${d.title}`, "candidates", cand.id);
       }
-
-      // Submit the render and move on — collectRenders() picks it up on a later run.
-      const projectId = await opusclipCreateProject(d.url, opusKey, opusBase, {
-        title: d.title, speaker: d.speaker || d.figureName, channel: d.channel,
-      });
-      await database.update(candidates)
-        .set({ status: "rendering", opusProjectId: projectId })
-        .where(eq(candidates.id, cand.id));
-      rendering++;
-      await logEvent("rendering", `Rendering [${score}]: ${d.title} (OpusClip ${projectId})`, "candidates", cand.id);
       } catch (e) {
         await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, cand.id));
         await logEvent("error", `Failed on "${d.title}": ${(e as Error).message}`, "candidates", cand.id);
       }
     }
-    if (capped) break;
   }
 
   await database.update(runs)
     .set({ finishedAt: new Date(), found, posted: collect.collected, skipped })
     .where(eq(runs.id, run.id));
   await logEvent("run",
-    `Scout done — found ${found}, rendering ${rendering}, clips collected ${collect.collected}, skipped ${skipped}`);
+    `Scout done — found ${found}, rendering ${rendering}, queued ${queued}, collected ${collect.collected}, skipped ${skipped}`);
 
-  slog("scout_done", { found, rendering, collected: collect.collected, skipped });
-  return { runId: run.id, found, rendering, collected: collect.collected, skipped };
+  slog("scout_done", { found, rendering, queued, collected: collect.collected, skipped });
+  return { runId: run.id, found, rendering, queued, collected: collect.collected, skipped };
 }
