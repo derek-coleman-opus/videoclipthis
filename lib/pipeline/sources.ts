@@ -195,3 +195,64 @@ export function buildSources(
   // TODO(M-next): podcast (RSS), X signal stream, HN, Reddit sources.
   return sources;
 }
+
+/** Per-channel discovery diagnostics: resolved id + how many uploads survive each filter, at a
+ *  configurable recency window. Powers /api/debug/youtube so "0 videos" has a precise cause. */
+export interface ChannelReport {
+  name: string;
+  handle?: string;
+  resolvedId: string | null;
+  rawUploads: number;
+  passedLongForm: number;
+  passedEnglish: number;
+  passedRecency: number;
+  kept: { title: string; durationS: number; publishedAt: string | null }[];
+  dropped: { title: string; reason: string }[];
+  error?: string;
+}
+
+export async function youtubeChannelReport(
+  channels: { name: string; handle?: string }[],
+  apiKey: string,
+  hours: number,
+): Promise<ChannelReport[]> {
+  const cutoff = Date.now() - hours * 3600 * 1000;
+  const reports: ChannelReport[] = [];
+  for (const c of channels) {
+    const rep: ChannelReport = {
+      name: c.name, handle: c.handle, resolvedId: null,
+      rawUploads: 0, passedLongForm: 0, passedEnglish: 0, passedRecency: 0, kept: [], dropped: [],
+    };
+    try {
+      rep.resolvedId = await resolveChannelId(c, apiKey);
+      if (!rep.resolvedId) { rep.error = "could not resolve channel id (bad handle/name?)"; reports.push(rep); continue; }
+      const ch = await ytGet("channels", { part: "contentDetails", id: rep.resolvedId }, apiKey);
+      const uploads: string | undefined = ch.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
+      if (!uploads) { rep.error = "channel has no uploads playlist"; reports.push(rep); continue; }
+      const pl = await ytGet("playlistItems", { part: "contentDetails", playlistId: uploads, maxResults: "10" }, apiKey);
+      const ids: string[] = (pl.items ?? []).map((it: any) => it.contentDetails?.videoId).filter(Boolean);
+      if (!ids.length) { rep.error = "uploads playlist empty"; reports.push(rep); continue; }
+      const vids = await ytGet("videos", { part: "snippet,contentDetails", id: ids.join(",") }, apiKey);
+      rep.rawUploads = (vids.items ?? []).length;
+      for (const v of vids.items ?? []) {
+        const dur = parseDuration(v.contentDetails?.duration ?? "PT0S");
+        const title: string = v.snippet?.title ?? "";
+        if (dur < LONG_FORM_MIN_S) { rep.dropped.push({ title, reason: `too short (${Math.round(dur / 60)}min < 12min)` }); continue; }
+        rep.passedLongForm++;
+        if (!isEnglish(v)) { rep.dropped.push({ title, reason: "not English" }); continue; }
+        rep.passedEnglish++;
+        const published = v.snippet?.publishedAt ? new Date(v.snippet.publishedAt) : null;
+        if (published && published.getTime() < cutoff) {
+          rep.dropped.push({ title, reason: `older than ${hours}h (${published.toISOString().slice(0, 10)})` });
+          continue;
+        }
+        rep.passedRecency++;
+        rep.kept.push({ title, durationS: dur, publishedAt: published?.toISOString() ?? null });
+      }
+    } catch (e) {
+      rep.error = (e as Error).message;
+    }
+    reports.push(rep);
+  }
+  return reports;
+}
