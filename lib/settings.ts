@@ -13,7 +13,7 @@ export async function getSettings(): Promise<Settings> {
 export async function updateSettings(
   patch: Partial<{
     paused: boolean; threshold: number; autonomy: string;
-    niche: string; watchChannels: string;
+    niche: string; watchChannels: string; opusBrandTemplateId: string | null;
   }>,
 ): Promise<Settings> {
   const database = db();

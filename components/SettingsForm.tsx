@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 type Initial = {
   paused: boolean; threshold: number; autonomy: string;
-  niche: string; watchChannels: string;
+  niche: string; watchChannels: string; opusBrandTemplateId: string;
 };
 
 export default function SettingsForm({ initial }: { initial: Initial }) {
@@ -14,6 +14,7 @@ export default function SettingsForm({ initial }: { initial: Initial }) {
   const [autonomy, setAutonomy] = useState(initial.autonomy);
   const [niche, setNiche] = useState(initial.niche);
   const [watchChannels, setWatchChannels] = useState(initial.watchChannels);
+  const [opusBrandTemplateId, setOpusBrandTemplateId] = useState(initial.opusBrandTemplateId);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const router = useRouter();
@@ -25,7 +26,7 @@ export default function SettingsForm({ initial }: { initial: Initial }) {
       await fetch("/api/settings", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ paused, threshold: Number(threshold), autonomy, niche, watchChannels }),
+        body: JSON.stringify({ paused, threshold: Number(threshold), autonomy, niche, watchChannels, opusBrandTemplateId }),
       });
       setSaved(true);
       router.refresh();
@@ -73,6 +74,14 @@ export default function SettingsForm({ initial }: { initial: Initial }) {
           rows={5} value={watchChannels} onChange={(e) => setWatchChannels(e.target.value)}
           className="w-full rounded bg-neutral-800 p-2 text-sm font-mono"
           placeholder={"Anthropic | anthropic-ai\nGoogle DeepMind | Google_DeepMind"}
+        />
+      </label>
+      <label className="block">
+        <span className="mb-1 block">OpusClip brand template <span className="text-xs text-neutral-500">(the template id that sets vertical layout + caption style — fixes slide framing. List yours at <code>/api/debug/brand-templates</code>; blank = account default.)</span></span>
+        <input
+          type="text" value={opusBrandTemplateId} onChange={(e) => setOpusBrandTemplateId(e.target.value)}
+          className="w-full rounded bg-neutral-800 px-2 py-1 text-sm font-mono"
+          placeholder="(account default)"
         />
       </label>
       <button
