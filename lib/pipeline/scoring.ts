@@ -10,18 +10,23 @@ export interface Scorer {
   score(c: DetectedCandidate): Promise<Scored>;
 }
 
-export const RUBRIC_PROMPT = `You are the editor for a developer/AI clip account.
+/** The niche (audience description) comes from settings, so a self-hoster can point the
+ *  scorer at fitness, travel, finance… without touching code. */
+export function rubricPrompt(niche: string): string {
+  const audience = niche.trim() || "AI / developer tooling";
+  return `You are the editor for a clip account in this niche: ${audience}.
 Given a long video's title, channel/speaker, and transcript, score it 0-100 on
-clip-worthiness for an audience of AI/dev builders, weighting:
-- authority (25): is the speaker/org high-signal?
+clip-worthiness for an audience interested in ${audience}, weighting:
+- authority (25): is the speaker/org high-signal in this niche?
 - novelty (20): new release/announcement/genuinely new info?
-- relevance (20): do AI/dev builders care right now?
+- relevance (20): does this audience care right now?
 - virality (20): strong claims, quotable lines, a demo, a hot take?
 - freshness (10): recent + window still open?
 - saturation (5, inverse): penalize already-widely-clipped.
 Hard rule: the account posts English clips only — if the video's spoken language or
 transcript is not English, return score 0 regardless of the rubric.
 Return JSON: {"score": <int>, "rationale": "<short>"}.`;
+}
 
 function parseScore(text: string): Scored {
   try {
@@ -38,7 +43,8 @@ function parseScore(text: string): Scored {
 }
 
 /** Real scorer — Claude applies the rubric to transcript + metadata via the Messages API. */
-export function claudeScorer(apiKey: string, model = "claude-sonnet-4-6"): Scorer {
+export function claudeScorer(apiKey: string, niche = "", model = "claude-sonnet-4-6"): Scorer {
+  const system = rubricPrompt(niche);
   return {
     async score(c) {
       const user = [
@@ -59,7 +65,7 @@ export function claudeScorer(apiKey: string, model = "claude-sonnet-4-6"): Score
           body: JSON.stringify({
             model,
             max_tokens: 300,
-            system: RUBRIC_PROMPT,
+            system,
             messages: [{ role: "user", content: user }],
           }),
         });

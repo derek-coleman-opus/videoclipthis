@@ -92,9 +92,40 @@ async function callClaude(system: string, user: string, maxTokens = 500): Promis
   return (data.content ?? []).map((b: any) => b.text ?? "").join("");
 }
 
+/** Escape raw control characters (newlines, tabs) that appear INSIDE JSON string values.
+ *  Claude routinely emits literal line breaks inside multi-line post text, which strict
+ *  JSON.parse rejects ("Expected ',' or '}'..."). We only touch chars inside strings, so
+ *  structural whitespace between tokens is left alone. */
+function escapeControlCharsInStrings(s: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (const ch of s) {
+    if (escaped) { out += ch; escaped = false; continue; }
+    if (ch === "\\") { out += ch; escaped = true; continue; }
+    if (ch === '"') { inString = !inString; out += ch; continue; }
+    if (inString) {
+      if (ch === "\n") { out += "\\n"; continue; }
+      if (ch === "\r") { out += "\\r"; continue; }
+      if (ch === "\t") { out += "\\t"; continue; }
+      const code = ch.charCodeAt(0);
+      if (code < 0x20) { out += "\\u" + code.toString(16).padStart(4, "0"); continue; }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/** Parse the JSON object out of an LLM response. Tolerates the most common defect —
+ *  unescaped newlines inside string values (multi-line post drafts) — before giving up. */
 function parseJson(text: string): any {
   const match = text.match(/\{[\s\S]*\}/);
-  return JSON.parse(match ? match[0] : text);
+  const raw = match ? match[0] : text;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return JSON.parse(escapeControlCharsInStrings(raw));
+  }
 }
 
 function cleanDraft(raw: unknown): string {
@@ -208,4 +239,55 @@ export async function draftPlugReply(opts: {
     throw new Error("plug draft dropped the product URL — regenerate");
   }
   return { text, rationale: String(obj.rationale ?? "") };
+}
+
+const ACCOUNT_SCORE_PROMPT = `You decide whether an X account is worth adding to a builder's
+engagement roster — people they'll regularly reply to in order to grow. Score 0-100 on how
+good a target this account is, weighting:
+- niche fit: is their content in or adjacent to the builder's space (below)? Adjacent counts.
+- real person posting original content: a maker/builder/operator/creator, NOT a brand,
+  news feed, reply-spam/growth-hack account, engagement-bait account, or bot.
+- conversational: they share their work, ask questions, and reply to people (a reply will
+  be seen and can start a relationship), vs. broadcast-only.
+Scoring guide (be selective, not harsh — we want a healthy roster, not perfection):
+- 60-100: a real person whose content is on- or adjacent-to niche and who could plausibly
+  engage back. Most genuine builders/creators in the space belong here.
+- 40-59: real person but only loosely related, or thin/unclear signal.
+- 0-39: brand/company, news/aggregator, bot, engagement-bait/growth-hack, or clearly off-niche.
+When the signal is genuine-builder-in-the-space, lean toward including them.
+Return JSON: {"score": <int 0-100>, "rationale": "<one short sentence: who they are + why>"}.`;
+
+export interface AccountScore {
+  score: number;
+  rationale: string;
+}
+
+/** Judge whether a discovered account belongs on the engagement roster. Used by the
+ *  autonomous discovery loop to gate auto-adding targets. */
+export async function scoreAccount(opts: {
+  handle: string;
+  bio?: string;
+  followers?: number;
+  following?: number;
+  sampleTweets?: string[];
+  voiceNotes?: string;
+  mission?: string;
+}): Promise<AccountScore> {
+  const user = [
+    `The builder's space (who they want to reach):\n${opts.voiceNotes || opts.mission || "indie builders / software & startups"}`,
+    `Candidate account: @${opts.handle}`,
+    opts.bio ? `Bio: ${opts.bio}` : "Bio: (none)",
+    `Followers: ${opts.followers ?? "unknown"} · Following: ${opts.following ?? "unknown"}`,
+    opts.sampleTweets?.length
+      ? `Recent posts:\n${opts.sampleTweets.map((t) => `- ${t.replace(/\s+/g, " ").slice(0, 200)}`).join("\n")}`
+      : "Recent posts: (none available)",
+  ].filter(Boolean).join("\n\n");
+
+  const raw = await callClaude(ACCOUNT_SCORE_PROMPT, user, 200);
+  const obj = parseJson(raw);
+  const score = Math.round(Number(obj.score));
+  return {
+    score: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0,
+    rationale: String(obj.rationale ?? ""),
+  };
 }

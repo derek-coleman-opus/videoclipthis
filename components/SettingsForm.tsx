@@ -3,12 +3,17 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-type Initial = { paused: boolean; threshold: number; autonomy: string };
+type Initial = {
+  paused: boolean; threshold: number; autonomy: string;
+  niche: string; watchChannels: string;
+};
 
 export default function SettingsForm({ initial }: { initial: Initial }) {
   const [paused, setPaused] = useState(initial.paused);
   const [threshold, setThreshold] = useState(initial.threshold);
   const [autonomy, setAutonomy] = useState(initial.autonomy);
+  const [niche, setNiche] = useState(initial.niche);
+  const [watchChannels, setWatchChannels] = useState(initial.watchChannels);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const router = useRouter();
@@ -20,7 +25,7 @@ export default function SettingsForm({ initial }: { initial: Initial }) {
       await fetch("/api/settings", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ paused, threshold: Number(threshold), autonomy }),
+        body: JSON.stringify({ paused, threshold: Number(threshold), autonomy, niche, watchChannels }),
       });
       setSaved(true);
       router.refresh();
@@ -53,6 +58,22 @@ export default function SettingsForm({ initial }: { initial: Initial }) {
           <option value="assisted">assisted</option>
           <option value="auto">auto-post</option>
         </select>
+      </label>
+      <label className="block">
+        <span className="mb-1 block">Niche <span className="text-xs text-neutral-500">(the audience Claude scores clip-worthiness for — change it to fitness, travel, finance…)</span></span>
+        <input
+          type="text" value={niche} onChange={(e) => setNiche(e.target.value)}
+          className="w-full rounded bg-neutral-800 px-2 py-1 text-sm"
+          placeholder="AI / developer tooling"
+        />
+      </label>
+      <label className="block">
+        <span className="mb-1 block">Watched channels <span className="text-xs text-neutral-500">(one per line: Name | youtubeHandle — handle optional; empty = built-in defaults. Track <em>people</em> on the Figures page.)</span></span>
+        <textarea
+          rows={5} value={watchChannels} onChange={(e) => setWatchChannels(e.target.value)}
+          className="w-full rounded bg-neutral-800 p-2 text-sm font-mono"
+          placeholder={"Anthropic | anthropic-ai\nGoogle DeepMind | Google_DeepMind"}
+        />
       </label>
       <button
         onClick={save} disabled={saving}

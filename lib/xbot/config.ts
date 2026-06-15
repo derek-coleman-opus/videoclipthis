@@ -25,6 +25,17 @@ export const MIN_FOLLOWERS = 50;
 /** Method: keep a roster of 40-50 niche creators you engage with regularly. */
 export const TARGET_ROSTER_GOAL = 40;
 
+/** Stop auto-discovering once the active roster reaches this — keeps it focused (and the
+ *  outbound loop able to actually cover everyone within the cooldown window). */
+export const TARGET_ROSTER_MAX = Number(process.env.XBOT_TARGET_ROSTER_MAX ?? 60);
+
+/** Discovery: minimum Claude account-quality score to auto-add a discovered account. */
+export const ACCOUNT_SCORE_THRESHOLD = Number(process.env.XBOT_ACCOUNT_SCORE_THRESHOLD ?? 58);
+
+/** Discovery per-run budgets (Claude cost + X search quota control). */
+export const DISCOVERY_SCORE_PER_RUN = Number(process.env.XBOT_DISCOVERY_SCORE_PER_RUN ?? 40);
+export const DISCOVERY_ADD_PER_RUN = Number(process.env.XBOT_DISCOVERY_ADD_PER_RUN ?? 20);
+
 /** Generic-praise phrases: a reply that is mostly these adds no value and trains
  *  followers (and the algorithm) to ignore the account. */
 export const LOW_VALUE_PHRASES = [
@@ -44,6 +55,17 @@ export const BANNED_PHRASES = [
 /** Hard ceiling for any single draft (X limit is 280; leave headroom). */
 export const MAX_DRAFT_CHARS = 270;
 
+/** X automation-rules pacing: daily caps alone allow bursts (e.g. 20 replies in 10
+ *  minutes), which is exactly the pattern X's anti-spam systems look for. Posting is
+ *  therefore also held to (a) an hourly cap — the daily cap spread evenly across the
+ *  non-quiet window — and (b) a minimum gap between consecutive actions of a kind. */
+export const MIN_GAP_MINUTES: Record<string, number> = {
+  reply: 5,    // outbound growth replies
+  engage: 3,   // engage-backs in our own threads
+  post: 30,    // original posts
+  like: 2,     // Phase 2 auto-likes
+};
+
 /** How many recent posted drafts to compare against for duplicate-text detection. */
 export const DUPLICATE_LOOKBACK = 50;
 
@@ -51,5 +73,16 @@ export const DUPLICATE_LOOKBACK = 50;
 export const DUPLICATE_SIMILARITY = 0.8;
 
 /** Env-overridable pacing for discovery runs (Phase 3). */
-export const SEARCH_QUERIES_PER_RUN = Number(process.env.XBOT_SEARCH_QUERIES_PER_RUN ?? 3);
-export const SEARCH_MAX_RESULTS = Number(process.env.XBOT_SEARCH_MAX_RESULTS ?? 10);
+export const SEARCH_QUERIES_PER_RUN = Number(process.env.XBOT_SEARCH_QUERIES_PER_RUN ?? 5);
+export const SEARCH_MAX_RESULTS = Number(process.env.XBOT_SEARCH_MAX_RESULTS ?? 30);
+
+/** Outbound roster engagement (the "reply guy" loop): how many target timelines to read
+ *  per run. Timeline reads are the rate-limited part on X's Basic tier, so this caps the
+ *  expensive work; the daily reply cap + pacing still gate what actually gets posted. */
+export const OUTBOUND_TARGETS_PER_RUN = Number(process.env.XBOT_OUTBOUND_TARGETS_PER_RUN ?? 8);
+
+/** Only reply to a target's posts this fresh — a reply on a day-old tweet rarely gets seen. */
+export const OUTBOUND_TWEET_MAX_AGE_HOURS = Number(process.env.XBOT_OUTBOUND_MAX_AGE_HOURS ?? 24);
+
+/** How many recent tweets to pull per target timeline (X min is 5). */
+export const OUTBOUND_TIMELINE_PAGE = Number(process.env.XBOT_OUTBOUND_TIMELINE_PAGE ?? 10);

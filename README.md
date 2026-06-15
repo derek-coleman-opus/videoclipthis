@@ -1,6 +1,8 @@
 # videoclipthis
 
-Autonomous dev/AI video-clipping agent **+ a Vercel admin panel** to watch what it found, posted, and replied to.
+Open-source autonomous video-clipping agent **+ a Vercel admin panel** to watch what it found, posted, and replied to. This deployment clips dev/AI content, but the niche is a **setting, not code** — self-host it and point it at fitness, travel, finance, anything (see [Point it at your niche](#point-it-at-your-niche)).
+
+**Public vs private:** the site root (`/`) is a public landing page that showcases the clips your instance found and cut. Everything else — the dashboard (`/dashboard`), review queues, settings, and the XBot growth panel — is behind `ADMIN_PASSWORD` basic auth. The repo ships with zero data and zero secrets: your database, keys, and posting accounts stay yours.
 
 - **Daily Scout (own page):** hunts source platforms (YouTube, podcasts, events — *not just X*), surfaces the viral moments from fresh talks **first**, posts daily.
 - **Summon (`@videoclipthis`):** tagged in a thread → clips the relevant moment → replies.
@@ -24,7 +26,7 @@ One Next.js app: the pipeline lives in `lib/pipeline/*`, the activity store is D
 npm install
 cp .env.example .env            # set DATABASE_URL (Neon), ADMIN_PASSWORD, and the service keys below
 npm run db:push                 # create tables
-npm run dev                     # http://localhost:3000  (basic-auth: any user + ADMIN_PASSWORD)
+npm run dev                     # http://localhost:3000 → public landing; /dashboard → admin (any user + ADMIN_PASSWORD)
 ```
 Then click **Run Scout now** on the dashboard, or run a cycle from the terminal:
 
@@ -43,7 +45,7 @@ npm run pipeline    # scout, then summon, then feedback (the full cycle)
 2. Add a Postgres store (Vercel Postgres/Neon) → it sets `DATABASE_URL`.
 3. Set env vars: `ADMIN_PASSWORD`, `CRON_SECRET` (any random string), plus all the service keys below.
 4. Run `npm run db:push` against the Neon URL (locally or via a one-off) to create tables.
-5. Deploy. `vercel.json` runs **scout** every 30 min, **summon** every 5 min, and **feedback** hourly, with `maxDuration=300` on the pipeline routes (requires **Vercel Pro** — Hobby caps crons at daily and functions at 60s). The admin is the site root (basic-auth protected). Keep autonomy on `review` until the clip quality is proven, then switch to `auto` in Settings.
+5. Deploy. `vercel.json` runs **scout** every 30 min, **summon** every 5 min, **feedback** hourly, **xbot-inbound** every 30 min (engage-backs), and **xbot-outbound** every 2 h (replies to your target roster's fresh posts), with `maxDuration=300` on the pipeline routes (requires **Vercel Pro** — Hobby caps crons at daily and functions at 60s). The site root is the public showcase; the admin lives at `/dashboard` (basic-auth protected). Keep autonomy on `review` until the clip quality is proven, then switch to `auto` in Settings.
 
 ## Going live
 
@@ -72,8 +74,14 @@ The pipeline is wired to real services; you only need keys and the X account lab
 | `YOUTUBE_API_KEY` | ingest + transcripts | Google Cloud console |
 | X dev account (v2 write + stream) + **"Automated" label** | posting + summon | developer.x.com — **apply early, long lead** |
 
-## Fork it for your niche
-Change `WATCHLIST` in `lib/pipeline/config.ts` to point the Scout at your sources (crypto, sports, finance, gamedev…) — the rest of the pipeline is niche-agnostic.
+## Point it at your niche
+No code changes needed — open the admin and set three things:
+
+1. **Settings → Niche** — the audience description Claude scores clip-worthiness against (e.g. `strength training & fitness`, `budget travel`).
+2. **Settings → Watched channels** — the YouTube channels the Scout monitors, one `Name | youtubeHandle` per line (overrides the built-in `WATCHLIST` in `lib/pipeline/config.ts`).
+3. **Figures** — the people it tracks, credits, and tags (their channels are watched and their appearances on other channels are searched).
+
+The scoring rubric, clipping, credit-first posting, and review queue are all niche-agnostic. The XBot panel (personal-account growth on X) is configured the same way: its mission, keywords, and target roster live in **XBot Settings**.
 
 ---
 The original Python proof-of-concept (which proved the pipeline design) is archived in `poc-python/`.
