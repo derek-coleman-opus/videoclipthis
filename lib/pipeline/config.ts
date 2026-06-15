@@ -19,8 +19,10 @@ export const DEFAULT_THRESHOLD = 70;
 export const COST_CAP_USD = Number(process.env.COST_CAP_USD ?? 5);
 export const MAX_CLIPS_PER_RUN = Number(process.env.MAX_CLIPS_PER_RUN ?? 25);
 
-/** Recency window: only ingest videos published within the last N hours (first-to-clip). */
-export const MAX_AGE_HOURS = Number(process.env.MAX_AGE_HOURS ?? 48);
+/** Recency window: only ingest videos published within the last N hours. Default 7 days —
+ *  watched channels don't post long-form daily, and talks/interviews stay clip-worthy for
+ *  weeks, so a tight 48h window starves the pipeline. Lower via MAX_AGE_HOURS for first-to-clip. */
+export const MAX_AGE_HOURS = Number(process.env.MAX_AGE_HOURS ?? 168);
 
 /** YouTube search.list costs 100 quota units per call, so figure searches (one per tracked
  *  figure) burn quota fast at a 30-min scout cadence. Only run them every N hours. */
