@@ -10,7 +10,7 @@ export interface Source {
 }
 
 const YT_API = "https://www.googleapis.com/youtube/v3";
-const LONG_FORM_MIN_S = 12 * 60; // ignore anything shorter than ~12 min
+const LONG_FORM_MIN_S = 8 * 60; // ignore anything shorter than ~8 min
 
 async function ytGet(path: string, params: Record<string, string>, apiKey: string): Promise<any> {
   const url = new URL(`${YT_API}/${path}`);
@@ -237,7 +237,7 @@ export async function youtubeChannelReport(
       for (const v of vids.items ?? []) {
         const dur = parseDuration(v.contentDetails?.duration ?? "PT0S");
         const title: string = v.snippet?.title ?? "";
-        if (dur < LONG_FORM_MIN_S) { rep.dropped.push({ title, reason: `too short (${Math.round(dur / 60)}min < 12min)` }); continue; }
+        if (dur < LONG_FORM_MIN_S) { rep.dropped.push({ title, reason: `too short (${Math.round(dur / 60)}min < ${LONG_FORM_MIN_S / 60}min)` }); continue; }
         rep.passedLongForm++;
         if (!isEnglish(v)) { rep.dropped.push({ title, reason: "not English" }); continue; }
         rep.passedEnglish++;

@@ -2,11 +2,21 @@
 export const WATCHLIST = {
   // Resolved to channel IDs at runtime. Handles cost 1 YouTube quota unit to resolve;
   // name search costs 100 — always set the handle when you know it.
+  // Mix of orgs (infrequent but high-signal) + interview/podcast channels (frequent, real faces
+  // on camera → far better vertical clips than slide talks). Verify handles via /api/debug/youtube.
   youtubeChannels: [
     { name: "Anthropic", handle: "anthropic-ai" },
     { name: "Google DeepMind", handle: "Google_DeepMind" },
     { name: "OpenAI", handle: "OpenAI" },
     { name: "AI Engineer", handle: "aiDotEngineer" },
+    { name: "Latent Space", handle: "LatentSpaceTV" },
+    { name: "Dwarkesh Patel", handle: "DwarkeshPatel" },
+    { name: "No Priors", handle: "NoPriorsPodcast" },
+    { name: "Y Combinator", handle: "ycombinator" },
+    { name: "a16z", handle: "a16z" },
+    { name: "Sequoia Capital", handle: "sequoiacapital" },
+    { name: "Machine Learning Street Talk", handle: "MachineLearningStreetTalk" },
+    { name: "Lex Fridman", handle: "lexfridman" },
   ] as { name: string; handle?: string }[],
   podcasts: [] as { name: string; rss: string }[],
   xSignalAccounts: ["karpathy", "AnthropicAI", "GoogleDeepMind", "OpenAIDevs"],
