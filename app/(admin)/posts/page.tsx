@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, ne } from "drizzle-orm";
 import { db, clips, candidates } from "@/lib/db";
 import ClipActions from "@/components/ClipActions";
 
@@ -113,6 +113,7 @@ async function load() {
     })
     .from(clips)
     .leftJoin(candidates, eq(clips.candidateId, candidates.id))
+    .where(ne(clips.status, "expired")) // stale review clips disappear from the queue
     .orderBy(desc(clips.createdAt))
     .limit(100);
 }
