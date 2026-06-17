@@ -15,6 +15,8 @@ const REQUIRED_COLUMNS: [string, string][] = [
   ["settings", "niche"],
   ["settings", "watch_channels"],
   ["settings", "opus_brand_template_id"],
+  ["settings", "search_topics"],
+  ["settings", "search_offset"],
   ["settings", "summon_since_id"],
   ["settings", "x_bot_user_id"],
   ["settings", "figure_search_at"],

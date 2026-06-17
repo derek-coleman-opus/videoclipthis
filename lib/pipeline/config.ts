@@ -42,3 +42,16 @@ export const FIGURE_SEARCH_INTERVAL_H = Number(process.env.FIGURE_SEARCH_INTERVA
  *  create call, so we keep in-flight renders at or below this and queue the rest. Stay a notch
  *  under the plan cap to leave headroom for Summon renders (shared concurrency budget). */
 export const MAX_CONCURRENT_RENDERS = Number(process.env.MAX_CONCURRENT_RENDERS ?? 3);
+
+/** Topic/keyword YouTube searches — a discovery vector beyond the channel list and tracked
+ *  figures. Admin "Search topics" overrides these. Each search.list call costs 100 quota units. */
+export const SEARCH_TOPICS = [
+  "AI agents", "LLM agents", "coding agents", "frontier models", "open source LLM",
+  "AI coding", "model context protocol", "AI evals", "reinforcement learning from human feedback",
+  "long context models", "multimodal AI", "AI interview", "GPU inference", "vibe coding",
+  "prompt engineering", "RAG retrieval augmented generation",
+];
+
+/** Cap on figure+topic search.list calls PER search burst, rotated across runs so the full list
+ *  is covered over a day without blowing the daily YouTube quota. ~budget × 100 units per burst. */
+export const SEARCH_BUDGET_PER_BURST = Number(process.env.SEARCH_BUDGET_PER_BURST ?? 12);

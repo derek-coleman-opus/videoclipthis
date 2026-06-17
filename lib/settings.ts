@@ -13,7 +13,7 @@ export async function getSettings(): Promise<Settings> {
 export async function updateSettings(
   patch: Partial<{
     paused: boolean; threshold: number; autonomy: string;
-    niche: string; watchChannels: string; opusBrandTemplateId: string | null;
+    niche: string; watchChannels: string; opusBrandTemplateId: string | null; searchTopics: string;
   }>,
 ): Promise<Settings> {
   const database = db();
@@ -41,9 +41,17 @@ export function parseWatchChannels(s: Settings): { name: string; handle?: string
     .filter((c) => c.name);
 }
 
-/** Persist pipeline state (Summon poll cursor, cached bot user id, figure-search throttle). */
+/** Parse the admin "Search topics" field (one keyword/phrase per line). Empty → code SEARCH_TOPICS. */
+export function parseSearchTopics(s: Settings): string[] {
+  return (s.searchTopics ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
+/** Persist pipeline state (Summon cursor, bot user id, search throttle + rotation offset). */
 export async function updateSummonState(
-  patch: Partial<{ summonSinceId: string | null; xBotUserId: string | null; figureSearchAt: Date | null }>,
+  patch: Partial<{
+    summonSinceId: string | null; xBotUserId: string | null;
+    figureSearchAt: Date | null; searchOffset: number;
+  }>,
 ): Promise<void> {
   const database = db();
   await getSettings();
