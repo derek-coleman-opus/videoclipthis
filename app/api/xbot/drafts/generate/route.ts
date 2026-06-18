@@ -2,10 +2,33 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, xbotDrafts, xbotTargets, xbotTweets } from "@/lib/db";
 import { logEvent } from "@/lib/pipeline/events";
-import { requireXbotDraftEnv } from "@/lib/xbot/env";
+import { slog } from "@/lib/pipeline/util";
+import { hasXbotWriteEnv, requireXbotDraftEnv } from "@/lib/xbot/env";
+import { xbotRw } from "@/lib/xbot/client";
 import { draftPlugReply, draftPostVariants, draftReply } from "@/lib/xbot/drafting";
+import { fullTweetText, FULL_TWEET_FIELDS, FULL_TWEET_EXPANSIONS, type TweetIncludes, type RawTweet } from "@/lib/xbot/fulltext";
 import { isDuplicateText, lowValueReason } from "@/lib/xbot/guards";
 import { getXbotSettings } from "@/lib/xbot/settings";
+
+/** Fetch a tweet's complete text (long-form note + reposted/quoted content) by id, when the
+ *  personal-account credentials exist. Best-effort: returns null so callers fall back to
+ *  whatever text the user pasted. */
+async function fetchFullTweetText(tweetId: string): Promise<string | null> {
+  if (!hasXbotWriteEnv()) return null;
+  try {
+    const client = await xbotRw();
+    const res = await client.v2.singleTweet(tweetId, {
+      "tweet.fields": FULL_TWEET_FIELDS as unknown as string[],
+      expansions: FULL_TWEET_EXPANSIONS as unknown as string[],
+    } as any);
+    if (!res.data) return null;
+    const text = fullTweetText(res.data as unknown as RawTweet, res.includes as TweetIncludes);
+    return text.trim() || null;
+  } catch (e) {
+    slog("xbot_fetch_tweet_error", { tweetId, error: (e as Error).message });
+    return null;
+  }
+}
 
 export const dynamic = "force-dynamic";
 // Claude drafting can take a while when generating multiple variants.
@@ -82,11 +105,19 @@ export async function POST(req: NextRequest) {
     }
 
     if (kind === "reply") {
-      const tweetText = String(body.tweetText ?? "").trim();
       const parsed = parseTweetUrl(String(body.tweetUrl ?? ""));
-      if (!parsed || !tweetText) {
+      if (!parsed) {
         return NextResponse.json(
-          { ok: false, error: "tweetUrl (x.com/<handle>/status/<id>) and tweetText are required" },
+          { ok: false, error: "tweetUrl (x.com/<handle>/status/<id>) is required" },
+          { status: 400 },
+        );
+      }
+      // Prefer the real full post (untruncated long-form + any reposted/quoted text) fetched
+      // from X; fall back to whatever the user pasted when credentials aren't configured.
+      const tweetText = (await fetchFullTweetText(parsed.tweetId)) ?? String(body.tweetText ?? "").trim();
+      if (!tweetText) {
+        return NextResponse.json(
+          { ok: false, error: "paste the tweet's text, or configure XBOT_* credentials to auto-fetch the full post" },
           { status: 400 },
         );
       }

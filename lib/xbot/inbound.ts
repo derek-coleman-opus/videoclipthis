@@ -4,6 +4,7 @@ import { logEvent } from "@/lib/pipeline/events";
 import { slog } from "@/lib/pipeline/util";
 import { describeXbotError, xbotRw } from "./client";
 import { draftEngageBack } from "./drafting";
+import { fullTweetText, type TweetIncludes } from "./fulltext";
 import { isDuplicateText } from "./guards";
 import { getXbotSettings, updateXbotSettings } from "./settings";
 
@@ -34,7 +35,7 @@ export async function checkInbound(): Promise<InboundResult> {
     max_results: 50,
     ...(settings.mentionsSinceId ? { since_id: settings.mentionsSinceId } : {}),
     expansions: ["author_id", "referenced_tweets.id"],
-    "tweet.fields": ["author_id", "created_at", "referenced_tweets", "text"],
+    "tweet.fields": ["author_id", "created_at", "referenced_tweets", "text", "note_tweet"],
     "user.fields": ["username", "description"],
   }).catch((e) => { throw describeXbotError(e); });
 
@@ -48,6 +49,9 @@ export async function checkInbound(): Promise<InboundResult> {
     const author = users.find((u) => u.id === mention.author_id);
     if (!author || author.id === meId) continue;
     result.found++;
+
+    // Full body (long-form note_tweet + any quoted post), not the truncated `text`.
+    const theirText = fullTweetText(mention, timeline.includes as TweetIncludes);
 
     let tweetRef = (await database
       .select().from(xbotTweets)
@@ -71,7 +75,7 @@ export async function checkInbound(): Promise<InboundResult> {
         tweetId: mention.id,
         targetId: target?.id ?? null,
         authorHandle: author.username,
-        text: mention.text,
+        text: theirText,
         tweetedAt: mention.created_at ? new Date(mention.created_at) : null,
         foundVia: "inbound",
         status: "found",
@@ -81,11 +85,13 @@ export async function checkInbound(): Promise<InboundResult> {
     // What of ours they were responding to, when the parent is in the includes and ours.
     const parentId = mention.referenced_tweets?.find((r) => r.type === "replied_to")?.id;
     const parent = parentId ? refTweets.find((t) => t.id === parentId) : undefined;
-    const ourText = parent?.author_id === meId ? parent.text : undefined;
+    const ourText = parent?.author_id === meId
+      ? fullTweetText(parent, timeline.includes as TweetIncludes)
+      : undefined;
 
     try {
       const drafted = await draftEngageBack({
-        theirText: mention.text,
+        theirText,
         theirHandle: author.username,
         ourText,
         voiceNotes: settings.voiceNotes ?? "",
@@ -101,7 +107,7 @@ export async function checkInbound(): Promise<InboundResult> {
         targetId: target?.id ?? null,
         tweetRefId: tweetRef.id,
         inReplyToTweetId: mention.id,
-        contextText: mention.text,
+        contextText: theirText,
         text: drafted.text,
         rationale: drafted.rationale,
       });
