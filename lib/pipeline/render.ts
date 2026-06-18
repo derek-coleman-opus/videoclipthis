@@ -5,7 +5,7 @@
 // scout and summon cycle: one cheap status check per in-flight candidate; finished renders
 // become clips (queued for review, auto-posted, or posted as a summon reply); stale ones fail.
 
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, isNotNull, lt } from "drizzle-orm";
 import { db, candidates, clips, summonRequests, type Candidate } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import { opusclipFetchClips, type OpusClipResult } from "./opusclip";
@@ -19,10 +19,28 @@ import type { DetectedCandidate, Moment } from "./types";
 /** Give a render this long before declaring it dead. */
 const RENDER_TIMEOUT_H = Number(process.env.RENDER_TIMEOUT_H ?? 2);
 
+/** Pending-review clips older than this are stale — the moment has passed, so expire them
+ *  (we only want to post NEW content). Env-overridable. */
+const CLIP_REVIEW_TTL_H = Number(process.env.CLIP_REVIEW_TTL_H ?? 6);
+
 export interface CollectResult {
   checked: number;
   collected: number;
   failed: number;
+  expired: number;
+}
+
+/** Drop review-queue clips that have gone stale (older than the review TTL). */
+export async function expireStaleClips(): Promise<number> {
+  const cutoff = new Date(Date.now() - CLIP_REVIEW_TTL_H * 3600 * 1000);
+  const rows = await db().update(clips)
+    .set({ status: "expired" })
+    .where(and(eq(clips.status, "pending_review"), lt(clips.createdAt, cutoff)))
+    .returning({ id: clips.id });
+  if (rows.length) {
+    await logEvent("run", `Expired ${rows.length} stale review clip(s) (>${CLIP_REVIEW_TTL_H}h old)`);
+  }
+  return rows.length;
 }
 
 function toDetected(row: Candidate): DetectedCandidate {
@@ -62,6 +80,9 @@ export async function collectRenders(): Promise<CollectResult> {
     .select()
     .from(candidates)
     .where(and(eq(candidates.status, "rendering"), isNotNull(candidates.opusProjectId)));
+
+  // Expire stale review-queue clips first (only post NEW content).
+  const expiredClips = await expireStaleClips();
 
   let collected = 0;
   let failed = 0;
@@ -151,6 +172,8 @@ export async function collectRenders(): Promise<CollectResult> {
     collected++;
   }
 
-  if (inFlight.length) slog("collect_renders", { checked: inFlight.length, collected, failed });
-  return { checked: inFlight.length, collected, failed };
+  if (inFlight.length || expiredClips) {
+    slog("collect_renders", { checked: inFlight.length, collected, failed, expired: expiredClips });
+  }
+  return { checked: inFlight.length, collected, failed, expired: expiredClips };
 }

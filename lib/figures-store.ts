@@ -13,21 +13,19 @@ function toFigure(r: FigureRow): Figure {
   };
 }
 
-/** Seed the built-in defaults once, if the table is empty. */
+/** Seed the built-in defaults, adding any that aren't already present (so expanding the code
+ *  FIGURES list propagates to existing databases). Existing rows are left untouched. */
 async function ensureSeeded(): Promise<void> {
-  const existing = await db().select({ id: figuresTable.id }).from(figuresTable).limit(1);
-  if (existing.length === 0) {
-    await db().insert(figuresTable).values(
-      FIGURES.map((f) => ({
-        name: f.name,
-        xHandle: f.xHandle,
-        org: f.org ?? "",
-        role: f.role ?? "",
-        priority: f.priority ?? 2,
-        youtubeChannelId: f.youtubeChannelId ?? null,
-      })),
-    ).onConflictDoNothing();
-  }
+  await db().insert(figuresTable).values(
+    FIGURES.map((f) => ({
+      name: f.name,
+      xHandle: f.xHandle,
+      org: f.org ?? "",
+      role: f.role ?? "",
+      priority: f.priority ?? 2,
+      youtubeChannelId: f.youtubeChannelId ?? null,
+    })),
+  ).onConflictDoNothing();
 }
 
 /** Figures in the pipeline shape (seeds defaults on first use). */
