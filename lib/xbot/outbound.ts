@@ -5,6 +5,7 @@ import { slog } from "@/lib/pipeline/util";
 import { OUTBOUND_TARGETS_PER_RUN, OUTBOUND_TIMELINE_PAGE, OUTBOUND_TWEET_MAX_AGE_HOURS } from "./config";
 import { describeXbotError, xbotRw } from "./client";
 import { draftReply } from "./drafting";
+import { fullTweetText, FULL_TWEET_FIELDS, FULL_TWEET_EXPANSIONS, type RawTweet, type TweetIncludes } from "./fulltext";
 import { isDuplicateText, lowValueReason, targetInCooldown } from "./guards";
 import { getXbotSettings } from "./settings";
 
@@ -14,9 +15,7 @@ export interface OutboundResult {
   skipped: number;   // cooldown / pending / no-fresh-post / guard-rejected
 }
 
-interface TimelineTweet {
-  id: string;
-  text: string;
+interface TimelineTweet extends RawTweet {
   created_at?: string;
   public_metrics?: { like_count?: number; reply_count?: number };
 }
@@ -61,8 +60,9 @@ export async function checkOutbound(): Promise<OutboundResult> {
       const timeline = await client.v2.userTimeline(userId, {
         max_results: OUTBOUND_TIMELINE_PAGE,
         exclude: ["retweets", "replies"], // their ORIGINAL posts only
-        "tweet.fields": ["created_at", "public_metrics", "text"],
-      }).catch((e) => { throw describeXbotError(e); });
+        "tweet.fields": FULL_TWEET_FIELDS as unknown as string[],
+        expansions: FULL_TWEET_EXPANSIONS as unknown as string[],
+      } as any).catch((e) => { throw describeXbotError(e); });
       result.checked++;
       await touch(target.id);
 
@@ -70,11 +70,14 @@ export async function checkOutbound(): Promise<OutboundResult> {
       const best = await pickBestTweet(tweets, freshCutoff);
       if (!best) { result.skipped++; continue; }
 
+      // Full body (long-form note_tweet + any quoted tweet), not the truncated `text`.
+      const fullText = fullTweetText(best, timeline.includes as TweetIncludes);
+
       const tweetRef = (await database.insert(xbotTweets).values({
         tweetId: best.id,
         targetId: target.id,
         authorHandle: target.handle,
-        text: best.text,
+        text: fullText,
         likeCount: best.public_metrics?.like_count ?? 0,
         replyCount: best.public_metrics?.reply_count ?? 0,
         tweetedAt: best.created_at ? new Date(best.created_at) : null,
@@ -85,7 +88,7 @@ export async function checkOutbound(): Promise<OutboundResult> {
       const prior = await priorInteraction(target);
       const isFollowup = Boolean(prior.reply);
       const drafted = await draftReply({
-        tweetText: best.text,
+        tweetText: fullText,
         authorHandle: target.handle,
         authorBio: target.bio ?? "",
         voiceNotes: settings.voiceNotes ?? "",
@@ -106,7 +109,7 @@ export async function checkOutbound(): Promise<OutboundResult> {
         targetId: target.id,
         tweetRefId: tweetRef.id,
         inReplyToTweetId: best.id,
-        contextText: best.text,
+        contextText: fullText,
         text: drafted.text,
         rationale: drafted.rationale,
       });
