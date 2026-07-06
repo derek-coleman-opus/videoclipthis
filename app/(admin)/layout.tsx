@@ -31,7 +31,8 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
             <Link href="/xbot/playbook" className="hover:text-white">Playbook</Link>
             <Link href="/xbot/settings" className="hover:text-white">XBot Settings</Link>
           </span>
-          <span className="border-l border-neutral-700 pl-4">
+          <span className="flex gap-4 border-l border-neutral-700 pl-4">
+            <a href="/api/admin/diagnostics" className="text-neutral-500 hover:text-white" title="env, schema, per-service health checks">Diagnostics</a>
             <Link href="/" className="text-neutral-500 hover:text-white">Public site ↗</Link>
           </span>
         </nav>

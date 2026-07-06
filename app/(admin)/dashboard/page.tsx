@@ -1,4 +1,4 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { db, candidates, clips, events, runs } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import RunButton from "@/components/RunButton";
@@ -31,12 +31,17 @@ async function loadData() {
   const one = sql<number>`count(*)::int`;
   const totalFound = Number((await d.select({ n: one }).from(candidates))[0]?.n ?? 0);
   const posted = Number((await d.select({ n: one }).from(clips).where(eq(clips.status, "posted")))[0]?.n ?? 0);
+  const dayStart = new Date();
+  dayStart.setUTCHours(0, 0, 0, 0);
+  const postedToday = Number((await d.select({ n: one }).from(clips)
+    .where(and(eq(clips.status, "posted"), gte(clips.postedAt, dayStart))))[0]?.n ?? 0);
   const pending = Number((await d.select({ n: one }).from(clips).where(eq(clips.status, "pending_review")))[0]?.n ?? 0);
+  const queued = Number((await d.select({ n: one }).from(clips).where(eq(clips.status, "approved")))[0]?.n ?? 0);
   const reshared = Number((await d.select({ n: one }).from(clips).where(eq(clips.resharedBySpeaker, true)))[0]?.n ?? 0);
   const recent = await d.select().from(events).orderBy(desc(events.createdAt)).limit(30);
   const lastRun = (await d.select().from(runs).orderBy(desc(runs.startedAt)).limit(1))[0];
   const cfg = await getSettings();
-  return { totalFound, posted, pending, reshared, recent, lastRun, cfg };
+  return { totalFound, posted, postedToday, pending, queued, reshared, recent, lastRun, cfg };
 }
 
 export default async function Dashboard() {
@@ -55,7 +60,7 @@ export default async function Dashboard() {
       </div>
     );
   }
-  const { totalFound, posted, pending, reshared, recent, lastRun, cfg } = data;
+  const { totalFound, posted, postedToday, pending, queued, reshared, recent, lastRun, cfg } = data;
 
   return (
     <div className="space-y-6">
@@ -67,10 +72,12 @@ export default async function Dashboard() {
         <RunButton />
       </div>
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <StatCard label="Found" value={totalFound} />
-        <StatCard label="Posted" value={posted} />
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+        <StatCard label="Posted today" value={`${postedToday} / ${cfg.dailyClipCap ?? 6}`} hint="auto-post cap" />
+        <StatCard label="Queued to post" value={queued} hint="approved, waiting for a paced slot" />
         <StatCard label="In review" value={pending} />
+        <StatCard label="Posted (all time)" value={posted} />
+        <StatCard label="Found" value={totalFound} />
         <StatCard label="Reshared by speaker" value={reshared} hint="credit-first loop" />
       </div>
 

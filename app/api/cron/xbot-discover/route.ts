@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cronAuthError } from "@/lib/pipeline/cron-auth";
 import { hasXbotWriteEnv } from "@/lib/xbot/env";
 import { runDiscovery } from "@/lib/xbot/discovery";
 import { getXbotSettings } from "@/lib/xbot/settings";
@@ -11,13 +12,8 @@ export const maxDuration = 300;
  *  niche creators as candidate targets (which the outbound loop then engages, under review).
  *  Skips cleanly while paused, before creds, or when the roster is already full. */
 export async function GET(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization");
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    }
-  }
+  const denied = cronAuthError(req);
+  if (denied) return denied;
   try {
     if (!hasXbotWriteEnv()) {
       return NextResponse.json({ ok: true, skipped: "XBOT_* credentials not configured" });

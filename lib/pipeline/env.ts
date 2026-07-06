@@ -42,6 +42,12 @@ export function requireXEnv(): void {
   requireEnv(X_REQUIRED, "posting to X");
 }
 
+/** True when the X posting tokens are configured — used by paths that should quietly
+ *  wait (approved clips queue up) rather than abort when posting isn't possible yet. */
+export function hasXEnv(): boolean {
+  return missing(X_REQUIRED).length === 0;
+}
+
 /** Reading tweet metrics / mentions needs a bearer token. */
 export function requireXReadEnv(): void {
   requireEnv(["X_BEARER_TOKEN"], "reading from X");
