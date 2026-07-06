@@ -30,3 +30,13 @@ export function describeXbotError(e: unknown): Error {
   const detail = err?.data ? ` ${JSON.stringify(err.data)}` : "";
   return new Error(`XBot X call failed${err?.code ? ` (${err.code})` : ""}: ${err?.message ?? e}${detail}`);
 }
+
+/** The personal account's own user id (needed for v2.like/follow), cached for the warm instance. */
+let _xbotUserId: string | null = null;
+export async function xbotUserId(): Promise<string> {
+  if (_xbotUserId) return _xbotUserId;
+  const client = await xbotRw();
+  const me = await client.v2.me().catch((e) => { throw describeXbotError(e); });
+  _xbotUserId = me.data.id;
+  return _xbotUserId;
+}

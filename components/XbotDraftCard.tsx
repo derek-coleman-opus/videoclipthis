@@ -45,10 +45,11 @@ export default function XbotDraftCard({ draft }: { draft: Draft }) {
       });
       const json = await res.json();
       if (!json.ok) {
+        // Keep the error on screen — do NOT refresh (a refresh re-renders and wipes it).
         setErr(json.error ?? "failed");
-      } else if (json.note) {
-        setNote(json.note);
+        return;
       }
+      if (json.note) setNote(json.note);
       router.refresh();
     } catch (e) {
       setErr((e as Error).message);
@@ -148,9 +149,13 @@ export default function XbotDraftCard({ draft }: { draft: Draft }) {
             {busy === "regenerate" ? "Regenerating…" : "↻ Regenerate"}
           </button>
         </span>
-        {err && <span className="text-xs text-red-400">{err}</span>}
         {note && <span className="text-xs text-amber-300">{note}</span>}
       </div>
+      {err && (
+        <p className="mt-2 rounded border border-red-800 bg-red-950/50 p-2 text-xs text-red-300">
+          Post failed: {err}
+        </p>
+      )}
     </div>
   );
 }

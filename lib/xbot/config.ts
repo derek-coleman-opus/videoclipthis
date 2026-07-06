@@ -86,3 +86,11 @@ export const OUTBOUND_TWEET_MAX_AGE_HOURS = Number(process.env.XBOT_OUTBOUND_MAX
 
 /** How many recent tweets to pull per target timeline (X min is 5). */
 export const OUTBOUND_TIMELINE_PAGE = Number(process.env.XBOT_OUTBOUND_TIMELINE_PAGE ?? 10);
+
+/** Auto-likes: how many of a target's fresh posts to like per outbound read. Liking needs no
+ *  review and has no per-target cooldown, so it's the steady always-on engagement signal. */
+export const LIKES_PER_TARGET_PER_RUN = Number(process.env.XBOT_LIKES_PER_TARGET_PER_RUN ?? 2);
+
+/** Pending reply/post drafts older than this are stale (the tweet they answer is no longer
+ *  fresh) and get expired out of the review queue. */
+export const DRAFT_TTL_H = Number(process.env.XBOT_DRAFT_TTL_H ?? 24);

@@ -1,10 +1,42 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 import { db, xbotActions, xbotDrafts, xbotTargets, type XbotDraft } from "@/lib/db";
 import { logEvent } from "@/lib/pipeline/events";
 import { slog } from "@/lib/pipeline/util";
-import { describeXbotError, xbotRw } from "./client";
+import { describeXbotError, xbotRw, xbotUserId } from "./client";
 import { getXbotSettings } from "./settings";
 import { pacingViolation, underCap } from "./guards";
+import { DRAFT_TTL_H } from "./config";
+
+/** Expire pending drafts older than the TTL — the tweet they reply to has gone stale, so we
+ *  never post a day-late reply. They drop out of the review queue (which shows only pending). */
+export async function expireStaleDrafts(): Promise<number> {
+  const cutoff = new Date(Date.now() - DRAFT_TTL_H * 3600 * 1000);
+  const rows = await db().update(xbotDrafts)
+    .set({ status: "expired" })
+    .where(and(eq(xbotDrafts.status, "pending_review"), lt(xbotDrafts.createdAt, cutoff)))
+    .returning({ id: xbotDrafts.id });
+  if (rows.length) {
+    await logEvent("xbot_outbound", `Expired ${rows.length} stale draft(s) (>${DRAFT_TTL_H}h old)`);
+  }
+  return rows.length;
+}
+
+/** Auto-like a tweet as the personal account: deduped, daily-cap-gated, recorded in the ledger.
+ *  Likes need no review (the safe, always-on engagement signal). Returns true if a like fired. */
+export async function likeTweet(tweetId: string, targetId: number | null, dailyLikeCap: number): Promise<boolean> {
+  const database = db();
+  // Never like the same tweet twice.
+  const already = await database.select({ id: xbotActions.id }).from(xbotActions)
+    .where(and(eq(xbotActions.kind, "like"), eq(xbotActions.tweetId, tweetId))).limit(1);
+  if (already.length) return false;
+  if (!(await underCap("like", dailyLikeCap))) return false;
+
+  const client = await xbotRw();
+  const uid = await xbotUserId();
+  await client.v2.like(uid, tweetId).catch((e) => { throw describeXbotError(e); });
+  await database.insert(xbotActions).values({ kind: "like", targetId, tweetId });
+  return true;
+}
 
 export interface PostOutcome {
   xPostId: string;

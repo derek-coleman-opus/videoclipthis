@@ -2,14 +2,19 @@ import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { db, xbotDrafts, xbotTargets, xbotTweets, type XbotTarget } from "@/lib/db";
 import { logEvent } from "@/lib/pipeline/events";
 import { slog } from "@/lib/pipeline/util";
-import { OUTBOUND_TARGETS_PER_RUN, OUTBOUND_TIMELINE_PAGE, OUTBOUND_TWEET_MAX_AGE_HOURS } from "./config";
+import {
+  OUTBOUND_TARGETS_PER_RUN, OUTBOUND_TIMELINE_PAGE, OUTBOUND_TWEET_MAX_AGE_HOURS,
+  LIKES_PER_TARGET_PER_RUN,
+} from "./config";
 import { describeXbotError, xbotRw } from "./client";
 import { draftReply } from "./drafting";
+import { likeTweet, expireStaleDrafts } from "./engagement";
 import { isDuplicateText, lowValueReason, targetInCooldown } from "./guards";
 import { getXbotSettings } from "./settings";
 
 export interface OutboundResult {
   checked: number;   // targets we read a timeline for
+  liked: number;     // fresh posts auto-liked (no review, no cooldown)
   drafted: number;   // useful replies queued
   skipped: number;   // cooldown / pending / no-fresh-post / guard-rejected
 }
@@ -35,7 +40,10 @@ export async function checkOutbound(): Promise<OutboundResult> {
   const settings = await getXbotSettings();
   const database = db();
   const client = await xbotRw();
-  const result: OutboundResult = { checked: 0, drafted: 0, skipped: 0 };
+  const result: OutboundResult = { checked: 0, liked: 0, drafted: 0, skipped: 0 };
+
+  // Purge stale pending drafts first — never post a day-late reply, and keep the queue clean.
+  await expireStaleDrafts();
 
   // Round-robin: never-checked first, then oldest checkpoint. Pull a generous slice so
   // cooldown/pending skips don't starve the API budget.
@@ -50,9 +58,10 @@ export async function checkOutbound(): Promise<OutboundResult> {
   for (const target of roster) {
     if (result.checked >= OUTBOUND_TARGETS_PER_RUN) break;
 
-    // Cheap skips first — no API spend.
-    if (targetInCooldown(target, settings.cooldownDays)) { result.skipped++; continue; }
-    if (await hasPendingReplyDraft(target.id)) { result.skipped++; continue; }
+    // Liking has no cooldown, so we still read (and like) cooldown/pending targets when
+    // auto-like is on — that's the always-on engagement. Drafting a reply is gated separately.
+    const canDraft = !targetInCooldown(target, settings.cooldownDays) && !(await hasPendingReplyDraft(target.id));
+    if (!settings.likesAuto && !canDraft) { result.skipped++; continue; }
 
     try {
       const userId = await resolveTargetUserId(client, target);
@@ -67,6 +76,23 @@ export async function checkOutbound(): Promise<OutboundResult> {
       await touch(target.id);
 
       const tweets = (timeline.tweets ?? []) as TimelineTweet[];
+
+      // Auto-like their freshest posts (no review, no cooldown, daily-cap gated).
+      if (settings.likesAuto) {
+        const freshForLike = tweets
+          .filter((t) => (t.created_at ? new Date(t.created_at).getTime() : 0) >= freshCutoff)
+          .slice(0, LIKES_PER_TARGET_PER_RUN);
+        for (const t of freshForLike) {
+          try {
+            if (await likeTweet(t.id, target.id, settings.dailyLikeCap)) result.liked++;
+          } catch (e) {
+            slog("xbot_like_error", { handle: target.handle, error: (e as Error).message });
+            break; // stop liking on error (e.g. rate limit) — try again next run
+          }
+        }
+      }
+
+      if (!canDraft) { result.skipped++; continue; }
       const best = await pickBestTweet(tweets, freshCutoff);
       if (!best) { result.skipped++; continue; }
 
@@ -120,7 +146,7 @@ export async function checkOutbound(): Promise<OutboundResult> {
 
   await logEvent(
     "xbot_outbound",
-    `Outbound roster check: read ${result.checked} timeline(s), drafted ${result.drafted} reply(ies)`,
+    `Outbound roster check: read ${result.checked} timeline(s), liked ${result.liked}, drafted ${result.drafted} reply(ies)`,
   );
   slog("xbot_outbound", { ...result });
   return result;
