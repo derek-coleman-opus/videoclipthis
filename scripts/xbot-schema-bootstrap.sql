@@ -1,10 +1,12 @@
--- XBot schema bootstrap — combines drizzle migrations 0004 + 0005 + 0006.
--- Written as ONE statement (a single DO block) so it works in hosted SQL consoles
--- like the Neon SQL editor, which send input as a single prepared statement and
--- reject multi-command scripts ("cannot insert multiple commands into a prepared
--- statement"). Idempotent: safe to run repeatedly and safe on a database where
--- any subset of these migrations was already applied.
--- Touches ONLY xbot_* tables; the clip-bot tables are not affected.
+-- FULL schema sync — brings any videoclipthis database up to what the current code
+-- expects (drizzle migrations 0004 → 0010 plus legacy clip-bot columns). Written as ONE
+-- statement (a single DO block) so it works in hosted SQL consoles like the Neon SQL
+-- editor, which send input as a single prepared statement and reject multi-command
+-- scripts ("cannot insert multiple commands into a prepared statement"). Idempotent:
+-- safe to run repeatedly and safe on a database where any subset was already applied.
+--
+-- The same block is embedded in app/api/admin/migrate/route.ts (the one-click browser
+-- sync). Per CLAUDE.md, every schema change must update BOTH places.
 
 DO $$
 BEGIN
@@ -144,6 +146,23 @@ BEGIN
   ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "niche" text DEFAULT 'AI / developer tooling' NOT NULL;
   ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "watch_channels" text DEFAULT '' NOT NULL;
   ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "opus_brand_template_id" text;
+
+  -- ── legacy clip-bot columns/tables (pre-0007 databases) ──────────────────
+  ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "summon_since_id" text;
+  ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "x_bot_user_id" text;
+  ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "figure_search_at" timestamp with time zone;
+  ALTER TABLE "candidates" ADD COLUMN IF NOT EXISTS "opus_project_id" text;
+  CREATE TABLE IF NOT EXISTS "figures" (
+    "id" serial PRIMARY KEY NOT NULL,
+    "name" text NOT NULL,
+    "x_handle" text NOT NULL,
+    "org" text DEFAULT '',
+    "role" text DEFAULT '',
+    "priority" integer DEFAULT 2,
+    "youtube_channel_id" text,
+    "created_at" timestamp with time zone DEFAULT now()
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS "figures_handle_idx" ON "figures" ("x_handle");
 
   -- ── 0009: safety-gate hold reason on auto-posted drafts ──────────────────
   ALTER TABLE "xbot_drafts" ADD COLUMN IF NOT EXISTS "hold_reason" text DEFAULT '';
