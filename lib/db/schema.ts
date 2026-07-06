@@ -21,6 +21,7 @@ export const candidates = pgTable("candidates", {
   signalStrength: real("signal_strength").default(0),
   figureName: text("figure_name"),                   // matched tracked AI figure, if any
   opusProjectId: text("opus_project_id"),            // OpusClip project rendering this candidate's clips
+  renderStartedAt: ts("render_started_at"),          // when the render was SUBMITTED (timeout clock)
   status: text("status").notNull().default("found"), // found|scored|held|skipped|rendering|selected|posted|failed
   score: integer("score"),
   rationale: text("rationale").default(""),
@@ -42,7 +43,9 @@ export const clips = pgTable("clips", {
   xPostId: text("x_post_id"),
   replyTo: text("reply_to"),                          // tweet id for summon replies
   kind: text("kind").notNull().default("scout"),      // scout | summon
-  status: text("status").notNull().default("pending_review"), // pending_review|approved|posted|rejected|failed
+  status: text("status").notNull().default("pending_review"),
+      // pending_review | approved (ready, waiting for a paced posting slot) | posted | rejected | failed
+  failReason: text("fail_reason").default(""),         // why the last publish attempt failed (retriable)
   views: integer("views").default(0),
   resharedBySpeaker: boolean("reshared_by_speaker").default(false),
   costUsd: real("cost_usd").default(0),
@@ -93,7 +96,8 @@ export const settings = pgTable("settings", {
   id: integer("id").primaryKey().default(1),
   paused: boolean("paused").notNull().default(false),
   threshold: integer("threshold").notNull().default(70),
-  autonomy: text("autonomy").notNull().default("review"), // review|assisted|auto
+  autonomy: text("autonomy").notNull().default("review"), // review|auto (legacy "assisted" treated as review)
+  dailyClipCap: integer("daily_clip_cap").notNull().default(6), // max auto-posted scout clips per UTC day
   niche: text("niche").notNull().default("AI / developer tooling"), // audience the scorer ranks for
   watchChannels: text("watch_channels").notNull().default(""), // "Name | handle" per line; "" → code WATCHLIST
   opusBrandTemplateId: text("opus_brand_template_id"), // OpusClip template: vertical layout + caption style
@@ -191,12 +195,13 @@ export const xbotDrafts = pgTable("xbot_drafts", {
   contextText: text("context_text").default(""),       // target tweet snapshot for the review UI
   text: text("text").notNull(),
   status: text("status").notNull().default("pending_review"),
-      // pending_review | approved | scheduled | posted | rejected | failed
+      // pending_review | held | approved | scheduled | posted | rejected | failed
   scheduledAt: ts("scheduled_at"),
   xPostId: text("x_post_id"),
   postedAt: ts("posted_at"),
   editedByHuman: boolean("edited_by_human").default(false),
   rationale: text("rationale").default(""),            // why Claude chose this angle
+  holdReason: text("hold_reason").default(""),         // why the safety gate held an auto-post
   mediaIdea: text("media_idea").default(""),           // suggested image/video — text-only posts underperform
   createdAt: ts("created_at").defaultNow(),
 }, (t) => ({

@@ -12,6 +12,8 @@ type Draft = {
   inReplyToTweetId: string | null;
   authorHandle?: string | null;
   mediaIdea?: string | null;
+  status?: string;
+  holdReason?: string | null;
 };
 
 const MAX_CHARS = 270;
@@ -89,6 +91,11 @@ export default function XbotDraftCard({ draft }: { draft: Draft }) {
     <div className="rounded-lg border border-neutral-800 p-3">
       <div className="mb-2 flex items-center gap-2 text-xs text-neutral-500">
         <span className="rounded bg-neutral-800 px-1.5 py-0.5 uppercase">{draft.kind}</span>
+        {draft.status === "held" && (
+          <span className="rounded bg-amber-900/60 px-1.5 py-0.5 text-amber-200" title={draft.holdReason ?? ""}>
+            ⚠ held by safety: {draft.holdReason || "flagged"}
+          </span>
+        )}
         {draft.inReplyToTweetId && (
           <a
             href={`https://x.com/${draft.authorHandle ?? "i"}/status/${draft.inReplyToTweetId}`}

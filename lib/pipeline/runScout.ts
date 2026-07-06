@@ -1,8 +1,8 @@
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
-import { db, candidates, runs } from "@/lib/db";
+import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
+import { db, candidates, clips, runs } from "@/lib/db";
 import { getSettings, parseWatchChannels, parseSearchTopics, updateSummonState } from "@/lib/settings";
 import {
-  DEFAULT_THRESHOLD, MAX_CONCURRENT_RENDERS, FIGURE_SEARCH_INTERVAL_H,
+  COST_CAP_USD, DEFAULT_THRESHOLD, MAX_CLIPS_PER_RUN, MAX_CONCURRENT_RENDERS, FIGURE_SEARCH_INTERVAL_H,
   SEARCH_TOPICS, SEARCH_BUDGET_PER_BURST,
 } from "./config";
 import { requireScoutEnv } from "./env";
@@ -90,8 +90,20 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
     (await database.select({ n: sql<number>`count(*)::int` })
       .from(candidates).where(eq(candidates.status, "rendering")))[0]?.n ?? 0,
   );
-  let slots = Math.max(0, MAX_CONCURRENT_RENDERS - inFlight);
-  slog("scout_start", { threshold, collected: collect.collected, inFlight, slots });
+  // Hardening caps, enforced: never submit more than MAX_CLIPS_PER_RUN renders in one run,
+  // and stop submitting entirely once today's recorded clip spend reaches COST_CAP_USD.
+  let slots = Math.max(0, Math.min(MAX_CONCURRENT_RENDERS - inFlight, MAX_CLIPS_PER_RUN));
+  const dayStart = new Date();
+  dayStart.setUTCHours(0, 0, 0, 0);
+  const spentToday = Number(
+    (await database.select({ usd: sql<number>`coalesce(sum(${clips.costUsd}), 0)::float` })
+      .from(clips).where(gte(clips.createdAt, dayStart)))[0]?.usd ?? 0,
+  );
+  if (spentToday >= COST_CAP_USD && slots > 0) {
+    slots = 0;
+    await logEvent("run", `Cost cap reached ($${spentToday.toFixed(2)} ≥ $${COST_CAP_USD}) — no new renders today`);
+  }
+  slog("scout_start", { threshold, collected: collect.collected, inFlight, slots, spentToday });
 
   /** Submit one candidate's render; consumes a slot on success, marks failed on error. */
   async function submitRender(c: {
@@ -103,7 +115,7 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
         title: c.title, speaker: c.speaker || c.figureName || undefined, channel: c.channel || undefined,
       }, cfg.opusBrandTemplateId);
       await database.update(candidates)
-        .set({ status: "rendering", opusProjectId: projectId })
+        .set({ status: "rendering", opusProjectId: projectId, renderStartedAt: new Date() })
         .where(eq(candidates.id, c.id));
       rendering++; slots--;
       await logEvent("rendering", `Rendering [${c.score ?? "?"}]: ${c.title} (OpusClip ${projectId})`, "candidates", c.id);
@@ -211,10 +223,10 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   }
 
   await database.update(runs)
-    .set({ finishedAt: new Date(), found, posted: collect.collected, skipped })
+    .set({ finishedAt: new Date(), found, posted: collect.posted, skipped })
     .where(eq(runs.id, run.id));
   await logEvent("run",
-    `Scout done — found ${found}, rendering ${rendering}, queued ${queued}, collected ${collect.collected}, skipped ${skipped}`);
+    `Scout done — found ${found}, rendering ${rendering}, queued ${queued}, collected ${collect.collected}, posted ${collect.posted}, skipped ${skipped}`);
 
   slog("scout_done", { found, rendering, queued, collected: collect.collected, skipped });
   return { runId: run.id, found, rendering, queued, collected: collect.collected, skipped };

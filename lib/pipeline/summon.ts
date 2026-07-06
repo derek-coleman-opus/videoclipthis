@@ -1,7 +1,8 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db, candidates, summonRequests } from "@/lib/db";
 import { requireScoutEnv, requireXEnv, requireXReadEnv } from "./env";
 import { getSettings, updateSummonState } from "@/lib/settings";
+import { MAX_CONCURRENT_RENDERS } from "./config";
 import { opusclipCreateProject } from "./opusclip";
 import { collectRenders } from "./render";
 import { logEvent } from "./events";
@@ -39,6 +40,15 @@ export async function runSummon(): Promise<SummonResult> {
   }
   const { mentions } = await fetchMentions(botUserId, cfg.summonSinceId);
 
+  // Summon shares OpusClip's concurrent-render budget with Scout. Only take as many mentions
+  // as there are free slots; the cursor stops before unhandled ones, so they're retried next
+  // poll (5 min) instead of failing the create call and dropping the user's request.
+  const inFlight = Number(
+    (await database.select({ n: sql<number>`count(*)::int` })
+      .from(candidates).where(eq(candidates.status, "rendering")))[0]?.n ?? 0,
+  );
+  let slots = Math.max(0, MAX_CONCURRENT_RENDERS - inFlight);
+
   // Process oldest-first and advance the cursor only past mentions we actually handle, so a
   // burst larger than the per-run cap is resumed next poll instead of being skipped.
   const ascending = [...mentions].reverse();
@@ -46,6 +56,7 @@ export async function runSummon(): Promise<SummonResult> {
   let processed = 0;
   for (const m of ascending) {
     if (processed >= MAX_REPLIES_PER_RUN) break;
+    if (slots <= 0) break; // no free render slot — leave this mention for the next poll
     cursor = m.tweetId; // committing to a decision on this mention now
     if (!m.targetUrl) continue; // nothing to clip — no video URL in the mention or its parent
 
@@ -70,11 +81,12 @@ export async function runSummon(): Promise<SummonResult> {
     try {
       const projectId = await opusclipCreateProject(m.targetUrl, opusKey, opusBase, {}, cfg.opusBrandTemplateId);
       await database.update(candidates)
-        .set({ status: "rendering", opusProjectId: projectId })
+        .set({ status: "rendering", opusProjectId: projectId, renderStartedAt: new Date() })
         .where(eq(candidates.id, cand.id));
       await database.update(summonRequests).set({ status: "clipped" }).where(eq(summonRequests.id, req.id));
       await logEvent("rendering", `Summon: rendering a clip of ${m.targetUrl} for @${m.requester}`, "summon_requests", req.id);
       processed++;
+      slots--;
     } catch (e) {
       await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, cand.id));
       await database.update(summonRequests).set({ status: "failed" }).where(eq(summonRequests.id, req.id));

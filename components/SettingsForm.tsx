@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 type Initial = {
-  paused: boolean; threshold: number; autonomy: string;
+  paused: boolean; threshold: number; autonomy: string; dailyClipCap: number;
   niche: string; watchChannels: string; opusBrandTemplateId: string; searchTopics: string;
 };
 
@@ -12,6 +12,7 @@ export default function SettingsForm({ initial }: { initial: Initial }) {
   const [paused, setPaused] = useState(initial.paused);
   const [threshold, setThreshold] = useState(initial.threshold);
   const [autonomy, setAutonomy] = useState(initial.autonomy);
+  const [dailyClipCap, setDailyClipCap] = useState(initial.dailyClipCap);
   const [niche, setNiche] = useState(initial.niche);
   const [watchChannels, setWatchChannels] = useState(initial.watchChannels);
   const [opusBrandTemplateId, setOpusBrandTemplateId] = useState(initial.opusBrandTemplateId);
@@ -27,7 +28,10 @@ export default function SettingsForm({ initial }: { initial: Initial }) {
       await fetch("/api/settings", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ paused, threshold: Number(threshold), autonomy, niche, watchChannels, opusBrandTemplateId, searchTopics }),
+        body: JSON.stringify({
+          paused, threshold: Number(threshold), autonomy, dailyClipCap: Number(dailyClipCap),
+          niche, watchChannels, opusBrandTemplateId, searchTopics,
+        }),
       });
       setSaved(true);
       router.refresh();
@@ -53,13 +57,21 @@ export default function SettingsForm({ initial }: { initial: Initial }) {
       <label className="flex items-center justify-between gap-4">
         <span>Autonomy</span>
         <select
-          value={autonomy} onChange={(e) => setAutonomy(e.target.value)}
+          value={autonomy === "assisted" ? "review" : autonomy}
+          onChange={(e) => setAutonomy(e.target.value)}
           className="rounded bg-neutral-800 px-2 py-1"
         >
           <option value="review">review (queue all)</option>
-          <option value="assisted">assisted</option>
-          <option value="auto">auto-post</option>
+          <option value="auto">auto-post (capped + paced)</option>
         </select>
+      </label>
+      <label className="flex items-center justify-between gap-4">
+        <span>Daily clip cap <span className="text-xs text-neutral-500">(max auto-posts/day)</span></span>
+        <input
+          type="number" min={0} max={48} value={dailyClipCap}
+          onChange={(e) => setDailyClipCap(Number(e.target.value))}
+          className="w-20 rounded bg-neutral-800 px-2 py-1 text-right"
+        />
       </label>
       <label className="block">
         <span className="mb-1 block">Niche <span className="text-xs text-neutral-500">(the audience Claude scores clip-worthiness for — change it to fitness, travel, finance…)</span></span>

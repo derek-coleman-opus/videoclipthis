@@ -1,0 +1,1 @@
+ALTER TABLE "xbot_drafts" ADD COLUMN "hold_reason" text DEFAULT '';

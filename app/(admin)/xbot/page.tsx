@@ -8,6 +8,8 @@ import { SETUP_ITEMS } from "@/lib/xbot/playbook";
 import XbotInboundButton from "@/components/XbotInboundButton";
 import XbotOutboundButton from "@/components/XbotOutboundButton";
 import XbotDiscoverButton from "@/components/XbotDiscoverButton";
+import XbotPostDueButton from "@/components/XbotPostDueButton";
+import XbotAutonomyPreset from "@/components/XbotAutonomyPreset";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +21,7 @@ export default async function XbotPage() {
     return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
   }
   const { settings, today, pending, targetCount, engagedBack, feed, hasCreds, setupDone } = data;
+  const notReady = !settings.voiceNotes?.trim() || !settings.mission?.trim();
 
   const stats: Array<[string, string]> = [
     ["Replies today", `${today.reply} / ${settings.dailyReplyCap}`],
@@ -49,6 +52,20 @@ export default async function XbotPage() {
         </div>
       </div>
 
+      <XbotAutonomyPreset
+        paused={settings.paused}
+        replyAutonomy={settings.replyAutonomy}
+        postAutonomy={settings.postAutonomy}
+      />
+
+      {notReady && (
+        <div className="mb-6 rounded-lg border border-amber-800/60 bg-amber-900/20 p-3 text-xs text-amber-200">
+          Set your <b>Mission</b> and <b>Voice notes</b> in{" "}
+          <Link href="/xbot/settings" className="underline">XBot Settings</Link> before going hands-off —
+          the drafts lean on them to sound like you.
+        </div>
+      )}
+
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
         {stats.map(([label, value]) => (
           <div key={label} className="rounded-lg border border-neutral-800 p-3">
@@ -65,6 +82,7 @@ export default async function XbotPage() {
         <XbotDiscoverButton disabled={!hasCreds} />
         <XbotOutboundButton disabled={!hasCreds} />
         <XbotInboundButton disabled={!hasCreds} />
+        <XbotPostDueButton disabled={!hasCreds} />
         <Link href="/xbot/targets" className="rounded-md border border-neutral-600 px-3 py-1.5 text-neutral-200 hover:bg-neutral-800">
           Manage targets
         </Link>

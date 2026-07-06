@@ -1,6 +1,6 @@
 {
-  "id": "6cea8970-3214-48c4-b07e-1220a8fc3772",
-  "prevId": "e1b2eec6-cb24-4af4-9f54-e05fd87b8f79",
+  "id": "6411dd45-d3fb-4ea4-a8b7-031c51df0550",
+  "prevId": "55036a50-d8c2-46ee-bbd4-cec3e53a8b6c",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -102,6 +102,12 @@
         "opus_project_id": {
           "name": "opus_project_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "render_started_at": {
+          "name": "render_started_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
@@ -247,6 +253,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'pending_review'"
+        },
+        "fail_reason": {
+          "name": "fail_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "''"
         },
         "views": {
           "name": "views",
@@ -574,6 +587,13 @@
           "notNull": true,
           "default": "'review'"
         },
+        "daily_clip_cap": {
+          "name": "daily_clip_cap",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 6
+        },
         "niche": {
           "name": "niche",
           "type": "text",
@@ -593,6 +613,20 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "search_topics": {
+          "name": "search_topics",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "search_offset": {
+          "name": "search_offset",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "summon_since_id": {
           "name": "summon_since_id",

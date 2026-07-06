@@ -21,8 +21,14 @@ const STATEMENTS: string[] = [
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "summon_since_id" text`,
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "x_bot_user_id" text`,
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "figure_search_at" timestamp with time zone`,
-  // candidates: OpusClip project id for two-phase rendering
+  // settings: daily auto-post volume cap (migration 0010)
+  `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "daily_clip_cap" integer NOT NULL DEFAULT 6`,
+  // candidates: OpusClip project id for two-phase rendering + submission timestamp
+  // (render-timeout clock, migration 0010)
   `ALTER TABLE "candidates" ADD COLUMN IF NOT EXISTS "opus_project_id" text`,
+  `ALTER TABLE "candidates" ADD COLUMN IF NOT EXISTS "render_started_at" timestamp with time zone`,
+  // clips: retriable publish failures carry their reason (migration 0010)
+  `ALTER TABLE "clips" ADD COLUMN IF NOT EXISTS "fail_reason" text DEFAULT ''`,
   // figures: DB-backed tracked-people table
   `CREATE TABLE IF NOT EXISTS "figures" (
      "id" serial PRIMARY KEY NOT NULL,

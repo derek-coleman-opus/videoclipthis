@@ -26,3 +26,8 @@ The canonical example is `scripts/xbot-schema-bootstrap.sql`.
 - The user typically has no local checkout: migrations get applied through the
   Neon console, so also provide the single-statement SQL form described above.
 - Keep migrations additive; never rewrite or reorder existing files in `drizzle/`.
+- **Every schema change MUST also be added to `app/api/admin/migrate/route.ts`**
+  (the one-click idempotent sync the operator runs from the browser) and, for
+  xbot tables, to `scripts/xbot-schema-bootstrap.sql`. A migration that exists
+  only in `drizzle/` WILL ship code that crashes production with
+  `column "..." does not exist` — this has happened; don't repeat it.

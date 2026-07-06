@@ -25,11 +25,20 @@ export default async function PostsPage() {
                     ? "bg-green-900/60 text-green-300"
                     : c.status === "pending_review"
                       ? "bg-amber-900/60 text-amber-300"
-                      : "bg-neutral-800 text-neutral-400"
+                      : c.status === "approved"
+                        ? "bg-sky-900/60 text-sky-300"
+                        : c.status === "failed"
+                          ? "bg-red-900/60 text-red-300"
+                          : "bg-neutral-800 text-neutral-400"
                 }`}
               >
-                {c.status}
+                {c.status === "approved" ? "queued to post" : c.status}
               </span>
+              {c.status === "failed" && c.failReason && (
+                <span className="max-w-md truncate text-red-400" title={c.failReason}>
+                  {c.failReason}
+                </span>
+              )}
               <span className="text-neutral-500">{c.kind}</span>
               {c.resharedBySpeaker && <span className="text-green-400">↻ reshared by speaker</span>}
               {typeof c.views === "number" && c.views > 0 && (
@@ -54,7 +63,9 @@ export default async function PostsPage() {
               )}
 
               <div className="min-w-0 flex-1">
-                <p className="whitespace-pre-wrap text-sm text-neutral-200">{c.postText}</p>
+                {!["pending_review", "failed", "approved"].includes(c.status) && (
+                  <p className="whitespace-pre-wrap text-sm text-neutral-200">{c.postText}</p>
+                )}
 
                 {/* Credit check: exactly who this post tags, vs the source to verify against. */}
                 <div className="mt-2 text-xs text-neutral-500">
@@ -78,9 +89,9 @@ export default async function PostsPage() {
                   )}
                 </div>
 
-                {c.status === "pending_review" && (
+                {["pending_review", "failed", "approved"].includes(c.status) && (
                   <div className="mt-2">
-                    <ClipActions id={c.id} />
+                    <ClipActions id={c.id} postText={c.postText} status={c.status} />
                   </div>
                 )}
               </div>
@@ -100,6 +111,7 @@ async function load() {
       status: clips.status,
       kind: clips.kind,
       postText: clips.postText,
+      failReason: clips.failReason,
       clipUrl: clips.clipUrl,
       resharedBySpeaker: clips.resharedBySpeaker,
       views: clips.views,
