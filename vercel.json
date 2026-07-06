@@ -6,6 +6,7 @@
     { "path": "/api/cron/feedback", "schedule": "0 * * * *" },
     { "path": "/api/cron/xbot-inbound", "schedule": "*/30 * * * *" },
     { "path": "/api/cron/xbot-outbound", "schedule": "0 */2 * * *" },
-    { "path": "/api/cron/xbot-discover", "schedule": "0 */6 * * *" }
+    { "path": "/api/cron/xbot-discover", "schedule": "0 */6 * * *" },
+    { "path": "/api/cron/xbot-post", "schedule": "*/15 * * * *" }
   ]
 }

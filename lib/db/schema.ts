@@ -189,12 +189,13 @@ export const xbotDrafts = pgTable("xbot_drafts", {
   contextText: text("context_text").default(""),       // target tweet snapshot for the review UI
   text: text("text").notNull(),
   status: text("status").notNull().default("pending_review"),
-      // pending_review | approved | scheduled | posted | rejected | failed
+      // pending_review | held | approved | scheduled | posted | rejected | failed
   scheduledAt: ts("scheduled_at"),
   xPostId: text("x_post_id"),
   postedAt: ts("posted_at"),
   editedByHuman: boolean("edited_by_human").default(false),
   rationale: text("rationale").default(""),            // why Claude chose this angle
+  holdReason: text("hold_reason").default(""),         // why the safety gate held an auto-post
   mediaIdea: text("media_idea").default(""),           // suggested image/video — text-only posts underperform
   createdAt: ts("created_at").defaultNow(),
 }, (t) => ({

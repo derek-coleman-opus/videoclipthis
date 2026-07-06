@@ -64,6 +64,13 @@
       "when": 1781552788795,
       "tag": "0008_freezing_rhodey",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1783353174754,
+      "tag": "0009_empty_jack_flag",
+      "breakpoints": true
     }
   ]
 }

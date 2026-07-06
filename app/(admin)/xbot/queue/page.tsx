@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { db, xbotDrafts, xbotTweets } from "@/lib/db";
 import XbotDraftCard from "@/components/XbotDraftCard";
 import XbotGenerate from "@/components/XbotGenerate";
@@ -30,6 +30,8 @@ export default async function XbotQueuePage() {
               inReplyToTweetId: draft.inReplyToTweetId,
               authorHandle: tweet?.authorHandle ?? null,
               mediaIdea: draft.mediaIdea,
+              status: draft.status,
+              holdReason: draft.holdReason ?? "",
             }}
           />
         ))}
@@ -46,7 +48,7 @@ async function load() {
     .select({ draft: xbotDrafts, tweet: xbotTweets })
     .from(xbotDrafts)
     .leftJoin(xbotTweets, eq(xbotDrafts.tweetRefId, xbotTweets.id))
-    .where(eq(xbotDrafts.status, "pending_review"))
+    .where(inArray(xbotDrafts.status, ["pending_review", "held"]))
     .orderBy(desc(xbotDrafts.createdAt))
     .limit(100);
 }
