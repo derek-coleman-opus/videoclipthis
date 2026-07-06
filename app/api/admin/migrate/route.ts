@@ -16,6 +16,8 @@ const STATEMENTS: string[] = [
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "niche" text NOT NULL DEFAULT 'AI / developer tooling'`,
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "watch_channels" text NOT NULL DEFAULT ''`,
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "opus_brand_template_id" text`,
+  `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "search_topics" text NOT NULL DEFAULT ''`,
+  `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "search_offset" integer NOT NULL DEFAULT 0`,
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "summon_since_id" text`,
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "x_bot_user_id" text`,
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "figure_search_at" timestamp with time zone`,

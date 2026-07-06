@@ -20,6 +20,7 @@ export default async function SettingsPage() {
           dailyClipCap: cfg.dailyClipCap ?? 6,
           niche: cfg.niche ?? "", watchChannels: cfg.watchChannels ?? "",
           opusBrandTemplateId: cfg.opusBrandTemplateId ?? "",
+          searchTopics: cfg.searchTopics ?? "",
         }}
       />
       <p className="mt-6 max-w-md text-xs leading-relaxed text-neutral-500">

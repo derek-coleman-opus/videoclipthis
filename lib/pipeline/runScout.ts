@@ -1,8 +1,9 @@
 import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import { db, candidates, clips, runs } from "@/lib/db";
-import { getSettings, parseWatchChannels, updateSummonState } from "@/lib/settings";
+import { getSettings, parseWatchChannels, parseSearchTopics, updateSummonState } from "@/lib/settings";
 import {
   COST_CAP_USD, DEFAULT_THRESHOLD, MAX_CLIPS_PER_RUN, MAX_CONCURRENT_RENDERS, FIGURE_SEARCH_INTERVAL_H,
+  SEARCH_TOPICS, SEARCH_BUDGET_PER_BURST,
 } from "./config";
 import { requireScoutEnv } from "./env";
 import { slog } from "./util";
@@ -54,15 +55,27 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   const collect = await collectRenders();
 
   const figures = await getFigures();
-  // Figure searches cost 100 YouTube quota units each — only run them every few hours.
-  const figureSearchDue =
+  // Figure + topic searches cost 100 YouTube quota units each — only run them every few hours,
+  // and only a rotating budget-sized window per burst (advance the offset so the whole list is
+  // covered across the day without blowing quota).
+  const searchDue =
     !cfg.figureSearchAt ||
     Date.now() - new Date(cfg.figureSearchAt).getTime() >= FIGURE_SEARCH_INTERVAL_H * 3600 * 1000;
+  const topicList = parseSearchTopics(cfg).length ? parseSearchTopics(cfg) : SEARCH_TOPICS;
+  const searchTerms = [
+    ...figures.map((f) => ({ term: f.name, figure: f })),
+    ...topicList.map((t) => ({ term: t })),
+  ];
   const sources = buildSources(figures, {
-    figureSearch: figureSearchDue,
     channels: parseWatchChannels(cfg), // settings override → point the bot at any niche
+    search: searchDue ? { terms: searchTerms, budget: SEARCH_BUDGET_PER_BURST, offset: cfg.searchOffset ?? 0 } : null,
   });
-  if (figureSearchDue) await updateSummonState({ figureSearchAt: new Date() });
+  if (searchDue) {
+    const next = searchTerms.length
+      ? (Number(cfg.searchOffset ?? 0) + SEARCH_BUDGET_PER_BURST) % searchTerms.length
+      : 0;
+    await updateSummonState({ figureSearchAt: new Date(), searchOffset: next });
+  }
   const scorer = claudeScorer(process.env.ANTHROPIC_API_KEY ?? "", cfg.niche ?? "");
   const opusKey = process.env.OPUSCLIP_API_KEY ?? "";
   const opusBase = process.env.OPUSCLIP_API_BASE ?? "";

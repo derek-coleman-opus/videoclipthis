@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 type Initial = {
   paused: boolean; threshold: number; autonomy: string; dailyClipCap: number;
-  niche: string; watchChannels: string; opusBrandTemplateId: string;
+  niche: string; watchChannels: string; opusBrandTemplateId: string; searchTopics: string;
 };
 
 export default function SettingsForm({ initial }: { initial: Initial }) {
@@ -16,6 +16,7 @@ export default function SettingsForm({ initial }: { initial: Initial }) {
   const [niche, setNiche] = useState(initial.niche);
   const [watchChannels, setWatchChannels] = useState(initial.watchChannels);
   const [opusBrandTemplateId, setOpusBrandTemplateId] = useState(initial.opusBrandTemplateId);
+  const [searchTopics, setSearchTopics] = useState(initial.searchTopics);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const router = useRouter();
@@ -28,8 +29,8 @@ export default function SettingsForm({ initial }: { initial: Initial }) {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          paused, threshold: Number(threshold), autonomy,
-          dailyClipCap: Number(dailyClipCap), niche, watchChannels, opusBrandTemplateId,
+          paused, threshold: Number(threshold), autonomy, dailyClipCap: Number(dailyClipCap),
+          niche, watchChannels, opusBrandTemplateId, searchTopics,
         }),
       });
       setSaved(true);
@@ -86,6 +87,14 @@ export default function SettingsForm({ initial }: { initial: Initial }) {
           rows={5} value={watchChannels} onChange={(e) => setWatchChannels(e.target.value)}
           className="w-full rounded bg-neutral-800 p-2 text-sm font-mono"
           placeholder={"Anthropic | anthropic-ai\nGoogle DeepMind | Google_DeepMind"}
+        />
+      </label>
+      <label className="block">
+        <span className="mb-1 block">Search topics <span className="text-xs text-neutral-500">(one keyword/phrase per line — the bot searches YouTube for fresh long-form on these, beyond the channel list; blank = built-in AI defaults)</span></span>
+        <textarea
+          rows={5} value={searchTopics} onChange={(e) => setSearchTopics(e.target.value)}
+          className="w-full rounded bg-neutral-800 p-2 text-sm font-mono"
+          placeholder={"AI agents\nLLM evals\ncoding agents\nopen source models"}
         />
       </label>
       <label className="block">

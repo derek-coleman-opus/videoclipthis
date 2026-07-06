@@ -10,7 +10,7 @@ export interface Source {
 }
 
 const YT_API = "https://www.googleapis.com/youtube/v3";
-const LONG_FORM_MIN_S = 12 * 60; // ignore anything shorter than ~12 min
+const LONG_FORM_MIN_S = 8 * 60; // ignore anything shorter than ~8 min
 
 async function ytGet(path: string, params: Record<string, string>, apiKey: string): Promise<any> {
   const url = new URL(`${YT_API}/${path}`);
@@ -114,6 +114,51 @@ async function searchFigureVideos(figure: Figure, apiKey: string, cutoffISO: str
   return out;
 }
 
+/** Recent long-form videos matching a topic/keyword, from ANYONE. No speaker credit is known up
+ *  front — runScout's matchFigure may still resolve one from the title; otherwise it's held. */
+async function searchTopicVideos(topic: string, apiKey: string, cutoffISO: string): Promise<DetectedCandidate[]> {
+  const s = await ytGet("search", {
+    part: "snippet", q: topic, type: "video", order: "date",
+    publishedAfter: cutoffISO, maxResults: "5", relevanceLanguage: "en",
+  }, apiKey);
+  const ids: string[] = (s.items ?? []).map((it: any) => it.id?.videoId).filter(Boolean);
+  if (!ids.length) return [];
+  const vids = await ytGet("videos", { part: "snippet,contentDetails", id: ids.join(",") }, apiKey);
+  const out: DetectedCandidate[] = [];
+  for (const v of vids.items ?? []) {
+    const dur = parseDuration(v.contentDetails?.duration ?? "PT0S");
+    if (dur < LONG_FORM_MIN_S) continue;
+    if (!isEnglish(v)) continue;
+    out.push({
+      source: "youtube",
+      url: `https://youtu.be/${v.id}`,
+      videoId: v.id,
+      title: v.snippet?.title ?? "",
+      speaker: v.snippet?.channelTitle ?? "",
+      channel: v.snippet?.channelTitle ?? "",
+      durationS: dur,
+      publishedAt: v.snippet?.publishedAt ? new Date(v.snippet.publishedAt) : null,
+      signalStrength: 0.4,
+      transcript: await transcriptOrDescription(v.id, v.snippet?.description ?? ""),
+    });
+  }
+  return out;
+}
+
+/** A figure-name or topic/keyword to search YouTube for. */
+export interface SearchTerm {
+  term: string;
+  figure?: Figure; // present → credit + tag this figure; absent → topic search
+}
+
+/** Search config for one run: which terms, how many to spend this burst, and where to start
+ *  (rotated across runs so the whole list is covered over a day within quota). */
+export interface SearchPlan {
+  terms: SearchTerm[];
+  budget: number;
+  offset: number;
+}
+
 /** Resolve a channel to its ID: exact handle if given, else search by name. Logs what it picked. */
 async function resolveChannelId(c: { name: string; handle?: string }, apiKey: string): Promise<string | null> {
   try {
@@ -135,12 +180,13 @@ async function resolveChannelId(c: { name: string; handle?: string }, apiKey: st
   }
 }
 
-/** Watches org channels (WATCHLIST) + every tracked figure's channel for fresh long-form uploads. */
+/** Watches org channels (WATCHLIST) + tracked figures' channels for fresh long-form uploads, and
+ *  (when a search plan is given) runs a rotated window of figure/topic searches within budget. */
 export function youtubeSource(
   channels: { name: string; handle?: string }[],
   apiKey: string,
   figures: Figure[],
-  figureSearch: boolean,
+  search: SearchPlan | null,
 ): Source {
   return {
     name: "youtube",
@@ -160,16 +206,21 @@ export function youtubeSource(
           console.warn(`youtube channel ${id} failed: ${(e as Error).message}`);
         }
       }
-      // Also catch videos that FEATURE a tracked figure but were posted by someone else
-      // (interviews, talks, reposts) — search YouTube by the figure's name; still credited to them.
-      // Quota-gated (100 units per figure per search): only when the caller says it's due.
-      if (figureSearch) {
+
+      // Search vector: figures (credited) + topics/keywords (uncredited). Each search.list call
+      // costs 100 quota units, so only a rotating `budget`-sized window runs per burst.
+      if (search && search.terms.length) {
+        const n = search.terms.length;
+        const start = ((search.offset % n) + n) % n;
+        const window = Array.from({ length: Math.min(search.budget, n) }, (_, i) => search.terms[(start + i) % n]);
         const cutoffISO = new Date(Date.now() - MAX_AGE_HOURS * 3600 * 1000).toISOString();
-        for (const f of figures) {
+        for (const t of window) {
           try {
-            all.push(...(await searchFigureVideos(f, apiKey, cutoffISO)));
+            all.push(...(t.figure
+              ? await searchFigureVideos(t.figure, apiKey, cutoffISO)
+              : await searchTopicVideos(t.term, apiKey, cutoffISO)));
           } catch (e) {
-            console.warn(`youtube figure search "${f.name}" failed: ${(e as Error).message}`);
+            console.warn(`youtube search "${t.term}" failed: ${(e as Error).message}`);
           }
         }
       }
@@ -181,16 +232,14 @@ export function youtubeSource(
 
 export function buildSources(
   figures: Figure[],
-  opts?: { figureSearch?: boolean; channels?: { name: string; handle?: string }[] },
+  opts?: { channels?: { name: string; handle?: string }[]; search?: SearchPlan | null },
 ): Source[] {
   // Settings-provided channels (the admin "Watched channels" field) override the code
   // WATCHLIST, so self-hosters can point the bot at their niche without a deploy.
   const channels = opts?.channels?.length ? opts.channels : WATCHLIST.youtubeChannels;
   const sources: Source[] = [];
   if (channels.length) {
-    sources.push(youtubeSource(
-      channels, process.env.YOUTUBE_API_KEY ?? "", figures, opts?.figureSearch ?? true,
-    ));
+    sources.push(youtubeSource(channels, process.env.YOUTUBE_API_KEY ?? "", figures, opts?.search ?? null));
   }
   // TODO(M-next): podcast (RSS), X signal stream, HN, Reddit sources.
   return sources;
@@ -237,7 +286,7 @@ export async function youtubeChannelReport(
       for (const v of vids.items ?? []) {
         const dur = parseDuration(v.contentDetails?.duration ?? "PT0S");
         const title: string = v.snippet?.title ?? "";
-        if (dur < LONG_FORM_MIN_S) { rep.dropped.push({ title, reason: `too short (${Math.round(dur / 60)}min < 12min)` }); continue; }
+        if (dur < LONG_FORM_MIN_S) { rep.dropped.push({ title, reason: `too short (${Math.round(dur / 60)}min < ${LONG_FORM_MIN_S / 60}min)` }); continue; }
         rep.passedLongForm++;
         if (!isEnglish(v)) { rep.dropped.push({ title, reason: "not English" }); continue; }
         rep.passedEnglish++;
