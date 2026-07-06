@@ -17,13 +17,15 @@ export default async function SettingsPage() {
       <SettingsForm
         initial={{
           paused: cfg.paused, threshold: cfg.threshold, autonomy: cfg.autonomy,
+          dailyClipCap: cfg.dailyClipCap ?? 6,
           niche: cfg.niche ?? "", watchChannels: cfg.watchChannels ?? "",
           opusBrandTemplateId: cfg.opusBrandTemplateId ?? "",
         }}
       />
       <p className="mt-6 max-w-md text-xs leading-relaxed text-neutral-500">
         <b>Autonomy</b> — <b>review</b> queues every clip for your approval (default, safest while tuning the
-        ranking). <b>auto</b> posts to X automatically above the threshold.
+        ranking). <b>auto</b> posts finished clips on its own, capped at the daily clip cap and spaced
+        at least 20 minutes apart so the account reads curated, not firehose.
         <br />
         <b>Threshold</b> is the clip-worthiness gate (0–100); raise it to be more selective.
         <br />

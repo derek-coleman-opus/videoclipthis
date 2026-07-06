@@ -93,6 +93,16 @@ export default async function PublicHomePage() {
           <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {showcase.map((c) => (
               <li key={c.id} className="flex flex-col rounded-lg border border-neutral-800 p-4">
+                {/* The proof: the actual rendered vertical clip, playable in place. */}
+                {c.clipUrl && (
+                  <video
+                    src={c.clipUrl}
+                    controls
+                    playsInline
+                    preload="metadata"
+                    className="mb-3 aspect-[9/16] w-full rounded-md border border-neutral-800 bg-black object-contain"
+                  />
+                )}
                 <p className="mb-2 line-clamp-3 text-sm text-neutral-200">{c.hookCaption || c.postText}</p>
                 <p className="mb-3 line-clamp-2 text-xs text-neutral-500">
                   {c.speaker ? `${c.speaker} — ` : ""}{c.title}
@@ -135,6 +145,7 @@ interface ShowcaseClip {
   id: number;
   hookCaption: string;
   postText: string;
+  clipUrl: string;
   xPostId: string | null;
   title: string;
   speaker: string;
@@ -154,6 +165,7 @@ async function loadShowcase(): Promise<ShowcaseClip[]> {
       id: clip.id,
       hookCaption: clip.hookCaption ?? "",
       postText: clip.postText,
+      clipUrl: clip.clipUrl ?? "",
       xPostId: clip.xPostId,
       title: cand?.title ?? "",
       speaker: cand?.speaker || cand?.figureName || "",

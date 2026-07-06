@@ -60,11 +60,18 @@ The pipeline is wired to real services; you only need keys and the X account lab
 | `lib/pipeline/publishing.ts` | X v2 post/reply with native video (needs the **Automated** label) |
 | `lib/pipeline/summon.ts` + `feedback.ts` + `xread.ts` | X mention polling + metrics/reshare reads |
 
-> **OpusClip note:** the client follows the published contract (`POST /api/clip-projects` →
-> poll `GET /api/exportable-clips?q=findByProjectId`; clip fields `uriForExport`, `score`,
-> `durationMs`, `title`). Two enum values remain to confirm with the API team (marked
-> `TODO-CONFIRM` in `opusclip.ts`): `curationPref.model` ("ClipAnything") and
-> `renderPref.layoutAspectRatio` ("9:16").
+> **OpusClip note:** the client is verified against OpusClip's own reference CLI
+> (`POST /api/clip-projects` → poll `GET /api/exportable-clips?q=findByProjectId`;
+> `clipDurations: [[min,max]]`, `layoutAspectRatio: "portrait"`, clip fields `uriForExport`,
+> `renderAsVideoFile.pending`, `judgeResult.hookScore`). Probe it live at
+> `/api/debug/opusclip`; list your brand templates at `/api/debug/brand-templates` and set
+> one in Settings so vertical framing + captions match your brand.
+
+**Posting behavior in production:** with `autonomy=auto`, finished clips queue as
+`approved` and drip out — at most **dailyClipCap** per day (admin Settings, default 6) with
+at least `MIN_CLIP_POST_GAP_MIN` (20 min) between posts. Summon replies skip the cap (a human
+asked). Failed publishes keep the rendered clip and show a **Retry post** button on `/posts`.
+Cron routes fail closed: `CRON_SECRET` must be set or every cron returns 503.
 
 ### Access checklist
 | Need | For | Where |

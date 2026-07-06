@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cronAuthError } from "@/lib/pipeline/cron-auth";
 import { runScout } from "@/lib/pipeline/runScout";
 import { runSummon } from "@/lib/pipeline/summon";
 import { runFeedback } from "@/lib/pipeline/feedback";
@@ -11,13 +12,8 @@ export const maxDuration = 300;
 // into vercel.json anymore — the split scout/summon/feedback crons run on their own cadence — but
 // kept so the full cycle can still be invoked manually in one request.
 export async function GET(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization");
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    }
-  }
+  const denied = cronAuthError(req);
+  if (denied) return denied;
   try {
     const scout = await runScout();
     const summon = await runSummon();

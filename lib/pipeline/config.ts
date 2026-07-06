@@ -15,9 +15,15 @@ export const WATCHLIST = {
 
 export const DEFAULT_THRESHOLD = 70;
 
-/** Hardening caps (env-overridable): stop a run after this much spend / this many clips. */
+/** Hardening caps (env-overridable), ENFORCED in runScout before render submission:
+ *  stop submitting once today's recorded clip spend reaches the cap, and never submit
+ *  more than MAX_CLIPS_PER_RUN renders in a single run. */
 export const COST_CAP_USD = Number(process.env.COST_CAP_USD ?? 5);
 export const MAX_CLIPS_PER_RUN = Number(process.env.MAX_CLIPS_PER_RUN ?? 25);
+
+/** Auto-post pacing: minimum minutes between consecutive clip posts (scout kind). The daily
+ *  volume cap itself lives in settings.dailyClipCap so it's tunable from the admin. */
+export const MIN_CLIP_POST_GAP_MIN = Number(process.env.MIN_CLIP_POST_GAP_MIN ?? 20);
 
 /** Recency window: only ingest videos published within the last N hours. Default 7 days —
  *  watched channels don't post long-form daily, and talks/interviews stay clip-worthy for

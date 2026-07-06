@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cronAuthError } from "@/lib/pipeline/cron-auth";
 import { hasXbotWriteEnv } from "@/lib/xbot/env";
 import { checkOutbound } from "@/lib/xbot/outbound";
 import { getXbotSettings } from "@/lib/xbot/settings";
@@ -11,13 +12,8 @@ export const maxDuration = 300;
  *  useful replies to their fresh original posts into the review queue — posting still goes
  *  through approval (or auto, per settings). Skips cleanly while paused or before creds. */
 export async function GET(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization");
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    }
-  }
+  const denied = cronAuthError(req);
+  if (denied) return denied;
   try {
     if (!hasXbotWriteEnv()) {
       return NextResponse.json({ ok: true, skipped: "XBOT_* credentials not configured" });

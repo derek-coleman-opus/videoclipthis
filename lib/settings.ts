@@ -12,7 +12,7 @@ export async function getSettings(): Promise<Settings> {
 
 export async function updateSettings(
   patch: Partial<{
-    paused: boolean; threshold: number; autonomy: string;
+    paused: boolean; threshold: number; autonomy: string; dailyClipCap: number;
     niche: string; watchChannels: string; opusBrandTemplateId: string | null;
   }>,
 ): Promise<Settings> {

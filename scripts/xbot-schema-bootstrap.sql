@@ -148,6 +148,11 @@ BEGIN
   -- ── 0009: safety-gate hold reason on auto-posted drafts ──────────────────
   ALTER TABLE "xbot_drafts" ADD COLUMN IF NOT EXISTS "hold_reason" text DEFAULT '';
 
+  -- ── 0010: clip-bot production hardening ──────────────────────────────────
+  ALTER TABLE "candidates" ADD COLUMN IF NOT EXISTS "render_started_at" timestamp with time zone;
+  ALTER TABLE "clips" ADD COLUMN IF NOT EXISTS "fail_reason" text DEFAULT '';
+  ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "daily_clip_cap" integer DEFAULT 6 NOT NULL;
+
   -- Adopt the new pacing on a pre-existing settings row, only where the old
   -- Phase 1 defaults were never edited:
   UPDATE "xbot_settings" SET "daily_post_cap" = 3 WHERE "id" = 1 AND "daily_post_cap" = 2;
