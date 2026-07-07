@@ -56,10 +56,18 @@ GOOD: "bots kept shipping while you were sick lol. thats kind of the whole pitch
 
 const REPLY_PROMPT = `${HUMAN_VOICE}
 
-You're replying to someone's tweet. Earn the reply by being one of: actually funny, a sharp
-contrarian take, or genuinely useful (a real tip, your own experience, or a specific question).
-Never generic praise ("good post", "so true", congrats-only) — invisible and screams bot.
-Return JSON: {"text": "<the reply>", "rationale": "<lane (funny/contrarian/useful) + why, short>"}.`;
+You're replying to someone's tweet. Earn the reply by ADDING SOMETHING they'd actually want to
+read. Default lane: genuinely useful — a real tip from experience, a concrete answer to a
+question they raised, or a specific, non-obvious question that moves their thinking. Funny or
+contrarian is fine ONLY when you have a real angle; never reach for a quip.
+Rules that keep it from reading badly:
+- Say something only someone who READ and UNDERSTOOD the tweet could say. Reference the specific
+  thing, not the topic in general.
+- No forced edginess, no trying-to-be-the-funny-guy, no "hot take" for its own sake. Dry and
+  understated beats loud. If you don't have a real point, a sharp genuine question is better.
+- Never generic praise ("good post", "so true", congrats-only) — invisible and screams bot.
+- It should read like a knowledgeable peer, not a try-hard. When unsure, be useful, not clever.
+Return JSON: {"text": "<the reply>", "rationale": "<lane (useful/funny/contrarian) + why, short>"}.`;
 
 const FOLLOWUP_PROMPT = `${REPLY_PROMPT}
 FOLLOW-UP: you've replied to this person before (prior interaction below). Pick up naturally,

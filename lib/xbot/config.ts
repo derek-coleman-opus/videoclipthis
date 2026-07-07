@@ -1,7 +1,8 @@
 /** XBot defaults. Pacing values live in xbot_settings so they're tunable without
  *  redeploys; these are the code-side seeds and discovery heuristics. */
 
-export const XBOT_MODEL = "claude-sonnet-4-6";
+/** Draft-writing model. Claude Sonnet 4.6 by default; override with XBOT_MODEL if needed. */
+export const XBOT_MODEL = process.env.XBOT_MODEL ?? "claude-sonnet-4-6";
 
 /** Default recent-search queries for finding build-in-public posters.
  *  Seeded into xbot_settings.keywords on first read; edit from the admin after that. */
