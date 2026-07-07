@@ -92,6 +92,7 @@ BEGIN
     "text" text NOT NULL,
     "like_count" integer DEFAULT 0,
     "reply_count" integer DEFAULT 0,
+    "view_count" integer DEFAULT 0,
     "tweeted_at" timestamp with time zone,
     "found_via" text DEFAULT 'search' NOT NULL,
     "liked" boolean DEFAULT false,
@@ -123,6 +124,8 @@ BEGIN
   CREATE UNIQUE INDEX IF NOT EXISTS "xbot_seeds_handle_idx" ON "xbot_seeds" USING btree ("handle");
   CREATE UNIQUE INDEX IF NOT EXISTS "xbot_targets_handle_idx" ON "xbot_targets" USING btree ("handle");
   CREATE INDEX IF NOT EXISTS "xbot_targets_status_idx" ON "xbot_targets" USING btree ("status");
+  ALTER TABLE "xbot_tweets" ADD COLUMN IF NOT EXISTS "view_count" integer DEFAULT 0;
+
   CREATE UNIQUE INDEX IF NOT EXISTS "xbot_tweets_tweet_id_idx" ON "xbot_tweets" USING btree ("tweet_id");
   CREATE INDEX IF NOT EXISTS "xbot_tweets_status_idx" ON "xbot_tweets" USING btree ("status");
 

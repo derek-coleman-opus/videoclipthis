@@ -32,6 +32,10 @@ export default async function XbotQueuePage() {
               mediaIdea: draft.mediaIdea,
               status: draft.status,
               holdReason: draft.holdReason ?? "",
+              tweetedAt: tweet?.tweetedAt ? new Date(tweet.tweetedAt).toISOString() : null,
+              likeCount: tweet?.likeCount ?? null,
+              replyCount: tweet?.replyCount ?? null,
+              viewCount: tweet?.viewCount ?? null,
             }}
           />
         ))}

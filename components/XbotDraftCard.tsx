@@ -14,9 +14,27 @@ type Draft = {
   mediaIdea?: string | null;
   status?: string;
   holdReason?: string | null;
+  tweetedAt?: string | null;
+  likeCount?: number | null;
+  replyCount?: number | null;
+  viewCount?: number | null;
 };
 
 const MAX_CHARS = 270;
+
+/** Compact "2h ago" / "3d ago" for the target tweet's age. */
+function timeAgo(iso?: string | null): string {
+  if (!iso) return "";
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+function fmt(n?: number | null): string {
+  if (!n || n < 0) return "0";
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
 
 const STYLES = [
   { value: "auto", label: "Auto" },
@@ -105,6 +123,14 @@ export default function XbotDraftCard({ draft }: { draft: Draft }) {
           </a>
         )}
       </div>
+      {(draft.tweetedAt || draft.likeCount != null || draft.viewCount != null) && (
+        <div className="mb-1 flex flex-wrap gap-x-3 text-xs text-neutral-500">
+          {draft.tweetedAt && <span>🕒 {timeAgo(draft.tweetedAt)}</span>}
+          <span>❤ {fmt(draft.likeCount)}</span>
+          <span>💬 {fmt(draft.replyCount)}</span>
+          <span>👁 {fmt(draft.viewCount)}</span>
+        </div>
+      )}
       {draft.contextText && (
         <blockquote className="mb-2 border-l-2 border-neutral-700 pl-2 text-sm text-neutral-400">
           {draft.contextText}

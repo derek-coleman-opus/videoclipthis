@@ -1,0 +1,1 @@
+ALTER TABLE "xbot_tweets" ADD COLUMN "view_count" integer DEFAULT 0;

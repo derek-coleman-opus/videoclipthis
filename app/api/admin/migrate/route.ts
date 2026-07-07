@@ -29,6 +29,7 @@ const STATEMENTS: string[] = [
   `ALTER TABLE "candidates" ADD COLUMN IF NOT EXISTS "render_started_at" timestamp with time zone`,
   // clips: retriable publish failures carry their reason (migration 0010)
   `ALTER TABLE "clips" ADD COLUMN IF NOT EXISTS "fail_reason" text DEFAULT ''`,
+  `ALTER TABLE "xbot_tweets" ADD COLUMN IF NOT EXISTS "view_count" integer DEFAULT 0`,
   // figures: DB-backed tracked-people table
   `CREATE TABLE IF NOT EXISTS "figures" (
      "id" serial PRIMARY KEY NOT NULL,

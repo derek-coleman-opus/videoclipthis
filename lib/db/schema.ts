@@ -173,6 +173,7 @@ export const xbotTweets = pgTable("xbot_tweets", {
   text: text("text").notNull(),                        // snapshot for drafting context
   likeCount: integer("like_count").default(0),
   replyCount: integer("reply_count").default(0),
+  viewCount: integer("view_count").default(0),
   tweetedAt: ts("tweeted_at"),
   foundVia: text("found_via").notNull().default("search"), // search | seed | reengage | manual | inbound
   liked: boolean("liked").default(false),

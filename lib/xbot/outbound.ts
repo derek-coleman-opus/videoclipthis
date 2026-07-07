@@ -22,7 +22,21 @@ export interface OutboundResult {
 
 interface TimelineTweet extends RawTweet {
   created_at?: string;
-  public_metrics?: { like_count?: number; reply_count?: number };
+  public_metrics?: { like_count?: number; reply_count?: number; impression_count?: number };
+}
+
+/** Only reply to a post that's actually worth a reply: real substance (not a bare link, "gm",
+ *  or a one-word tweet), and enough of a thought to react to. Keeps the bot from commenting on
+ *  things that make no sense to comment on. */
+function worthReplyingTo(text: string): boolean {
+  const stripped = text
+    .replace(/https?:\/\/\S+/g, " ")   // drop links
+    .replace(/@\w+/g, " ")             // drop @mentions
+    .replace(/[^\p{L}\p{N}\s]/gu, " ") // drop emoji/punctuation
+    .replace(/\s+/g, " ")
+    .trim();
+  const words = stripped.split(" ").filter(Boolean);
+  return stripped.length >= 25 && words.length >= 5;
 }
 
 /** The outbound "reply guy" loop: walk the target roster (least-recently-checked first),
@@ -99,6 +113,9 @@ export async function checkOutbound(): Promise<OutboundResult> {
       // Full body (long-form note_tweet + any quoted tweet), not the truncated `text`.
       const fullText = fullTweetText(best, timeline.includes as TweetIncludes);
 
+      // Skip posts that make no sense to reply to (bare links, "gm", one-liners).
+      if (!worthReplyingTo(fullText)) { result.skipped++; continue; }
+
       const tweetRef = (await database.insert(xbotTweets).values({
         tweetId: best.id,
         targetId: target.id,
@@ -106,6 +123,7 @@ export async function checkOutbound(): Promise<OutboundResult> {
         text: fullText,
         likeCount: best.public_metrics?.like_count ?? 0,
         replyCount: best.public_metrics?.reply_count ?? 0,
+        viewCount: best.public_metrics?.impression_count ?? 0,
         tweetedAt: best.created_at ? new Date(best.created_at) : null,
         foundVia: "roster",
         status: "found",
