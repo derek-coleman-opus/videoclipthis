@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cronAuthError } from "@/lib/pipeline/cron-auth";
 import { hasXbotWriteEnv } from "@/lib/xbot/env";
+import { harvestSearchTweets } from "@/lib/xbot/likes";
 import { checkOutbound } from "@/lib/xbot/outbound";
 import { getXbotSettings } from "@/lib/xbot/settings";
 
@@ -8,9 +9,10 @@ export const dynamic = "force-dynamic";
 // One Claude call per target with a fresh post; allow a batch to finish.
 export const maxDuration = 300;
 
-/** Vercel Cron: the outbound "reply guy" loop. Reads target-roster timelines and drafts
- *  useful replies to their fresh original posts into the review queue — posting still goes
- *  through approval (or auto, per settings). Skips cleanly while paused or before creds. */
+/** Vercel Cron: the outbound "reply guy" loop + like-supply harvesting. Reads target-roster
+ *  timelines and drafts useful replies to their fresh original posts into the review queue —
+ *  posting still goes through approval (or auto, per settings) — and tops up the paced like
+ *  queue from keyword search. Skips cleanly while paused or before creds. */
 export async function GET(req: NextRequest) {
   const denied = cronAuthError(req);
   if (denied) return denied;
@@ -22,7 +24,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, skipped: "xbot is paused" });
     }
     const result = await checkOutbound();
-    return NextResponse.json({ ok: true, ...result });
+    const harvest = await harvestSearchTweets();
+    return NextResponse.json({ ok: true, ...result, harvest });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
   }

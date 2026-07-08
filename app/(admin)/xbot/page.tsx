@@ -3,8 +3,10 @@ import { and, desc, eq, gte, like } from "drizzle-orm";
 import { db, events, xbotActions, xbotDrafts, xbotTargets } from "@/lib/db";
 import { getXbotSettings, parseSetupChecklist } from "@/lib/xbot/settings";
 import { hasXbotWriteEnv } from "@/lib/xbot/env";
+import { inQuietHours } from "@/lib/xbot/guards";
 import { TARGET_ROSTER_GOAL } from "@/lib/xbot/config";
 import { SETUP_ITEMS } from "@/lib/xbot/playbook";
+import { timeAgo } from "@/lib/timeago";
 import XbotInboundButton from "@/components/XbotInboundButton";
 import XbotOutboundButton from "@/components/XbotOutboundButton";
 import XbotDiscoverButton from "@/components/XbotDiscoverButton";
@@ -20,14 +22,16 @@ export default async function XbotPage() {
   } catch (e) {
     return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
   }
-  const { settings, today, pending, targetCount, engagedBack, feed, hasCreds, setupDone } = data;
+  const { settings, today, pending, targetCount, engagedBack, feed, hasCreds, setupDone, lastActionAt } = data;
   const notReady = !settings.voiceNotes?.trim() || !settings.mission?.trim();
+  const quietNow = inQuietHours(settings);
 
   const stats: Array<[string, string]> = [
     ["Replies today", `${today.reply} / ${settings.dailyReplyCap}`],
     ["Engage-backs today", `${today.engage} / ${settings.dailyEngageCap}`],
     ["Likes today", `${today.like} / ${settings.dailyLikeCap}`],
     ["Posts today", `${today.post} / ${settings.dailyPostCap}`],
+    ["Last action", lastActionAt ? timeAgo(lastActionAt) : "never"],
     ["Pending review", String(pending)],
     ["Target roster", `${targetCount} / ${TARGET_ROSTER_GOAL}+`],
     ["Engaged back", String(engagedBack)],
@@ -43,19 +47,34 @@ export default async function XbotPage() {
               setup {setupDone}/{SETUP_ITEMS.length} — finish the playbook checklist
             </Link>
           )}
-          {settings.paused && <span className="rounded bg-amber-900/50 px-2 py-1 text-amber-300">paused</span>}
-          {!hasCreds && (
-            <span className="rounded bg-neutral-800 px-2 py-1 text-neutral-400" title="Set XBOT_* env vars to enable posting">
-              X credentials not configured — drafting-only mode
-            </span>
-          )}
         </div>
       </div>
+
+      {/* State banner: when the bot cannot act, say so LOUDLY and say exactly why. A paused
+          default once no-opped every cron for days with nothing but a tiny badge. */}
+      {settings.paused ? (
+        <div className="mb-4 rounded-lg border border-red-800 bg-red-950/50 p-3 text-sm text-red-200">
+          <b>⏸ XBot is PAUSED — the crons are firing but doing nothing.</b> No likes, no replies,
+          no posts until you pick an autonomy mode below (🚀 Growth autopilot for the volume push).
+        </div>
+      ) : !hasCreds ? (
+        <div className="mb-4 rounded-lg border border-red-800 bg-red-950/50 p-3 text-sm text-red-200">
+          <b>X credentials not configured</b> — drafting-only mode. Set the <code>XBOT_*</code> env
+          vars in Vercel to enable liking and posting.
+        </div>
+      ) : quietNow ? (
+        <div className="mb-4 rounded-lg border border-amber-800 bg-amber-950/40 p-3 text-xs text-amber-200">
+          🌙 Quiet hours ({String(settings.quietStartUtc).padStart(2, "0")}:00–
+          {String(settings.quietEndUtc).padStart(2, "0")}:00 UTC): drafting continues, but likes and
+          posts hold until the window ends.
+        </div>
+      ) : null}
 
       <XbotAutonomyPreset
         paused={settings.paused}
         replyAutonomy={settings.replyAutonomy}
         postAutonomy={settings.postAutonomy}
+        dailyLikeCap={settings.dailyLikeCap}
       />
 
       {notReady && (
@@ -66,7 +85,7 @@ export default async function XbotPage() {
         </div>
       )}
 
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
         {stats.map(([label, value]) => (
           <div key={label} className="rounded-lg border border-neutral-800 p-3">
             <div className="text-xs text-neutral-500">{label}</div>
@@ -76,6 +95,9 @@ export default async function XbotPage() {
       </div>
 
       <div className="mb-6 flex flex-wrap items-center gap-3 text-sm">
+        <Link href="/xbot/activity" className="rounded-md bg-white px-3 py-1.5 font-medium text-black hover:bg-neutral-200">
+          Activity
+        </Link>
         <Link href="/xbot/queue" className="rounded-md bg-white px-3 py-1.5 font-medium text-black hover:bg-neutral-200">
           Review queue {pending > 0 ? `(${pending})` : ""}
         </Link>
@@ -140,8 +162,16 @@ async function load() {
     .orderBy(desc(events.createdAt))
     .limit(30);
 
+  // Heartbeat: the most recent ledger action — makes silence visible on the dashboard.
+  const lastAction = (await database
+    .select({ createdAt: xbotActions.createdAt })
+    .from(xbotActions)
+    .orderBy(desc(xbotActions.createdAt))
+    .limit(1))[0];
+
   return {
     settings, today, pending, targetCount, engagedBack, feed,
+    lastActionAt: lastAction?.createdAt ?? null,
     hasCreds: hasXbotWriteEnv(),
     setupDone: parseSetupChecklist(settings).filter((id) => SETUP_ITEMS.some((i) => i.id === id)).length,
   };

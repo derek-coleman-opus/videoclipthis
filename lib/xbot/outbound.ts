@@ -4,20 +4,19 @@ import { logEvent } from "@/lib/pipeline/events";
 import { slog } from "@/lib/pipeline/util";
 import {
   OUTBOUND_TARGETS_PER_RUN, OUTBOUND_TIMELINE_PAGE, OUTBOUND_TWEET_MAX_AGE_HOURS,
-  LIKES_PER_TARGET_PER_RUN,
 } from "./config";
 import { describeXbotError, xbotRw } from "./client";
 import { draftReply } from "./drafting";
-import { likeTweet, expireStaleDrafts } from "./engagement";
+import { expireStaleDrafts } from "./engagement";
 import { fullTweetText, FULL_TWEET_FIELDS, FULL_TWEET_EXPANSIONS, type RawTweet, type TweetIncludes } from "./fulltext";
 import { isDuplicateText, lowValueReason, targetInCooldown } from "./guards";
 import { getXbotSettings } from "./settings";
 
 export interface OutboundResult {
-  checked: number;   // targets we read a timeline for
-  liked: number;     // fresh posts auto-liked (no review, no cooldown)
-  drafted: number;   // useful replies queued
-  skipped: number;   // cooldown / pending / no-fresh-post / guard-rejected
+  checked: number;      // targets we read a timeline for
+  queuedLikes: number;  // fresh posts stored for the paced like queue (runLikes drains it)
+  drafted: number;      // useful replies queued
+  skipped: number;      // cooldown / pending / no-fresh-post / guard-rejected
 }
 
 interface TimelineTweet extends RawTweet {
@@ -53,7 +52,7 @@ export async function checkOutbound(): Promise<OutboundResult> {
   const settings = await getXbotSettings();
   const database = db();
   const client = await xbotRw();
-  const result: OutboundResult = { checked: 0, liked: 0, drafted: 0, skipped: 0 };
+  const result: OutboundResult = { checked: 0, queuedLikes: 0, drafted: 0, skipped: 0 };
 
   // Purge stale pending drafts first — never post a day-late reply, and keep the queue clean.
   await expireStaleDrafts();
@@ -71,8 +70,8 @@ export async function checkOutbound(): Promise<OutboundResult> {
   for (const target of roster) {
     if (result.checked >= OUTBOUND_TARGETS_PER_RUN) break;
 
-    // Liking has no cooldown, so we still read (and like) cooldown/pending targets when
-    // auto-like is on — that's the always-on engagement. Drafting a reply is gated separately.
+    // Storing tweets for the like queue has no cooldown, so we still read cooldown/pending
+    // targets when auto-like is on. Drafting a reply is gated separately.
     const canDraft = !targetInCooldown(target, settings.cooldownDays) && !(await hasPendingReplyDraft(target.id));
     if (!settings.likesAuto && !canDraft) { result.skipped++; continue; }
 
@@ -90,24 +89,40 @@ export async function checkOutbound(): Promise<OutboundResult> {
       await touch(target.id);
 
       const tweets = (timeline.tweets ?? []) as TimelineTweet[];
+      const fresh = tweets.filter(
+        (t) => (t.created_at ? new Date(t.created_at).getTime() : 0) >= freshCutoff,
+      );
+      if (!fresh.length) { result.skipped++; continue; }
 
-      // Auto-like their freshest posts (no review, no cooldown, daily-cap gated).
-      if (settings.likesAuto) {
-        const freshForLike = tweets
-          .filter((t) => (t.created_at ? new Date(t.created_at).getTime() : 0) >= freshCutoff)
-          .slice(0, LIKES_PER_TARGET_PER_RUN);
-        for (const t of freshForLike) {
-          try {
-            if (await likeTweet(t.id, target.id, settings.dailyLikeCap)) result.liked++;
-          } catch (e) {
-            slog("xbot_like_error", { handle: target.handle, error: (e as Error).message });
-            break; // stop liking on error (e.g. rate limit) — try again next run
-          }
-        }
+      // Which of these have we already stored? (Needed BEFORE the bulk insert below, both to
+      // count what's new and to keep the reply picker to genuinely new posts.)
+      const seenRows = await database
+        .select({ tweetId: xbotTweets.tweetId }).from(xbotTweets)
+        .where(inArray(xbotTweets.tweetId, fresh.map((t) => t.id)));
+      const seen = new Set(seenRows.map((r) => r.tweetId));
+      const unseen = fresh.filter((t) => !seen.has(t.id));
+
+      // Store EVERY fresh post (not just the reply pick): this feeds the paced like queue —
+      // runLikes (every 15 min) drains it under quiet-hours + hourly caps, instead of the old
+      // inline burst-liking that ignored pacing. Dedup via the unique tweet_id index.
+      if (unseen.length) {
+        await database.insert(xbotTweets).values(unseen.map((t) => ({
+          tweetId: t.id,
+          targetId: target.id,
+          authorHandle: target.handle,
+          text: fullTweetText(t, timeline.includes as TweetIncludes),
+          likeCount: t.public_metrics?.like_count ?? 0,
+          replyCount: t.public_metrics?.reply_count ?? 0,
+          viewCount: t.public_metrics?.impression_count ?? 0,
+          tweetedAt: t.created_at ? new Date(t.created_at) : null,
+          foundVia: "roster" as const,
+          status: "found" as const,
+        }))).onConflictDoNothing();
+        result.queuedLikes += unseen.length;
       }
 
       if (!canDraft) { result.skipped++; continue; }
-      const best = await pickBestTweet(tweets, freshCutoff);
+      const best = pickBestTweet(unseen);
       if (!best) { result.skipped++; continue; }
 
       // Full body (long-form note_tweet + any quoted tweet), not the truncated `text`.
@@ -116,18 +131,10 @@ export async function checkOutbound(): Promise<OutboundResult> {
       // Skip posts that make no sense to reply to (bare links, "gm", one-liners).
       if (!worthReplyingTo(fullText)) { result.skipped++; continue; }
 
-      const tweetRef = (await database.insert(xbotTweets).values({
-        tweetId: best.id,
-        targetId: target.id,
-        authorHandle: target.handle,
-        text: fullText,
-        likeCount: best.public_metrics?.like_count ?? 0,
-        replyCount: best.public_metrics?.reply_count ?? 0,
-        viewCount: best.public_metrics?.impression_count ?? 0,
-        tweetedAt: best.created_at ? new Date(best.created_at) : null,
-        foundVia: "roster",
-        status: "found",
-      }).returning())[0];
+      const tweetRef = (await database
+        .select().from(xbotTweets)
+        .where(eq(xbotTweets.tweetId, best.id)).limit(1))[0];
+      if (!tweetRef) { result.skipped++; continue; }
 
       const prior = await priorInteraction(target);
       const isFollowup = Boolean(prior.reply);
@@ -167,7 +174,7 @@ export async function checkOutbound(): Promise<OutboundResult> {
 
   await logEvent(
     "xbot_outbound",
-    `Outbound roster check: read ${result.checked} timeline(s), liked ${result.liked}, drafted ${result.drafted} reply(ies)`,
+    `Outbound roster check: read ${result.checked} timeline(s), queued ${result.queuedLikes} post(s) for liking, drafted ${result.drafted} reply(ies)`,
   );
   slog("xbot_outbound", { ...result });
   return result;
@@ -192,30 +199,17 @@ async function resolveTargetUserId(
   return user.id;
 }
 
-/** The freshest post worth replying to: within the freshness window, not already seen,
- *  preferring ones with some traction (a reply there gets seen) then most recent. */
-async function pickBestTweet(tweets: TimelineTweet[], freshCutoff: number): Promise<TimelineTweet | null> {
-  const fresh = tweets.filter((t) => {
-    const at = t.created_at ? new Date(t.created_at).getTime() : 0;
-    return at >= freshCutoff;
-  });
-  if (!fresh.length) return null;
-
-  const seenRows = await db()
-    .select({ tweetId: xbotTweets.tweetId }).from(xbotTweets)
-    .where(inArray(xbotTweets.tweetId, fresh.map((t) => t.id)));
-  const seen = new Set(seenRows.map((r) => r.tweetId));
-  const unseen = fresh.filter((t) => !seen.has(t.id));
+/** The best new post to reply to: prefer traction (a reply there gets seen), then recency.
+ *  Caller has already filtered to fresh + previously-unseen tweets. */
+function pickBestTweet(unseen: TimelineTweet[]): TimelineTweet | null {
   if (!unseen.length) return null;
-
   const traction = (t: TimelineTweet) =>
     (t.public_metrics?.like_count ?? 0) + (t.public_metrics?.reply_count ?? 0);
-  unseen.sort((a, b) => {
+  return [...unseen].sort((a, b) => {
     const d = traction(b) - traction(a);
     if (d !== 0) return d;
     return new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime();
-  });
-  return unseen[0];
+  })[0];
 }
 
 /** True if this target already has an unreviewed reply/follow-up draft — don't stack another. */

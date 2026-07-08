@@ -26,9 +26,9 @@ export const MIN_FOLLOWERS = 50;
 /** Method: keep a roster of 40-50 niche creators you engage with regularly. */
 export const TARGET_ROSTER_GOAL = 40;
 
-/** Stop auto-discovering once the active roster reaches this — keeps it focused (and the
- *  outbound loop able to actually cover everyone within the cooldown window). */
-export const TARGET_ROSTER_MAX = Number(process.env.XBOT_TARGET_ROSTER_MAX ?? 60);
+/** Stop auto-discovering once the active roster reaches this. Sized for growth volume: at
+ *  hourly outbound runs × 10 targets/run, ~150 targets are all covered every ~15 hours. */
+export const TARGET_ROSTER_MAX = Number(process.env.XBOT_TARGET_ROSTER_MAX ?? 150);
 
 /** Discovery: minimum Claude account-quality score to auto-add a discovered account. */
 export const ACCOUNT_SCORE_THRESHOLD = Number(process.env.XBOT_ACCOUNT_SCORE_THRESHOLD ?? 58);
@@ -80,7 +80,7 @@ export const SEARCH_MAX_RESULTS = Number(process.env.XBOT_SEARCH_MAX_RESULTS ?? 
 /** Outbound roster engagement (the "reply guy" loop): how many target timelines to read
  *  per run. Timeline reads are the rate-limited part on X's Basic tier, so this caps the
  *  expensive work; the daily reply cap + pacing still gate what actually gets posted. */
-export const OUTBOUND_TARGETS_PER_RUN = Number(process.env.XBOT_OUTBOUND_TARGETS_PER_RUN ?? 8);
+export const OUTBOUND_TARGETS_PER_RUN = Number(process.env.XBOT_OUTBOUND_TARGETS_PER_RUN ?? 10);
 
 /** Only reply to a target's posts this fresh — a reply on a day-old tweet rarely gets seen. */
 export const OUTBOUND_TWEET_MAX_AGE_HOURS = Number(process.env.XBOT_OUTBOUND_MAX_AGE_HOURS ?? 24);
@@ -88,9 +88,11 @@ export const OUTBOUND_TWEET_MAX_AGE_HOURS = Number(process.env.XBOT_OUTBOUND_MAX
 /** How many recent tweets to pull per target timeline (X min is 5). */
 export const OUTBOUND_TIMELINE_PAGE = Number(process.env.XBOT_OUTBOUND_TIMELINE_PAGE ?? 10);
 
-/** Auto-likes: how many of a target's fresh posts to like per outbound read. Liking needs no
- *  review and has no per-target cooldown, so it's the steady always-on engagement signal. */
-export const LIKES_PER_TARGET_PER_RUN = Number(process.env.XBOT_LIKES_PER_TARGET_PER_RUN ?? 2);
+/** Like-harvest (keyword search → paced like queue): searches per outbound run, and the max
+ *  tweets stored per run so the backlog can't balloon. Storing is not liking — runLikes drains
+ *  the queue under quiet hours + hourly/daily caps. */
+export const HARVEST_QUERIES_PER_RUN = Number(process.env.XBOT_HARVEST_QUERIES_PER_RUN ?? 3);
+export const HARVEST_MAX_PER_RUN = Number(process.env.XBOT_HARVEST_MAX_PER_RUN ?? 30);
 
 /** Pending reply/post drafts older than this are stale (the tweet they answer is no longer
  *  fresh) and get expired out of the review queue. */
