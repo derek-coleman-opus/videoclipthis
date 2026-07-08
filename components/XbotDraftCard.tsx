@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { timeAgo } from "@/lib/timeago";
 
 type Draft = {
   id: number;
@@ -21,15 +22,6 @@ type Draft = {
 };
 
 const MAX_CHARS = 270;
-
-/** Compact "2h ago" / "3d ago" for the target tweet's age. */
-function timeAgo(iso?: string | null): string {
-  if (!iso) return "";
-  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86400)}d ago`;
-}
 
 function fmt(n?: number | null): string {
   if (!n || n < 0) return "0";

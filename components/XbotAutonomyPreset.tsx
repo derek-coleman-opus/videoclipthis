@@ -3,24 +3,32 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-type Mode = "paused" | "review" | "assisted" | "autopilot";
+type Mode = "paused" | "review" | "assisted" | "autopilot" | "growth";
 
 /** One-click autonomy control. Each preset patches xbot_settings via the existing endpoint.
- *  Assisted+ (auto-like + auto-reply, own posts reviewed) is the recommended set-and-forget. */
+ *  Growth autopilot additionally sets the volume knobs for the 10k-followers push: aggressive
+ *  likes (250/day), ramped replies (start 30/day — bump weekly), and a 16h active window
+ *  (quiet 05:00-13:00 UTC ≈ US day + evening). Pacing guards spread every cap across the day. */
 const PRESETS: Record<Exclude<Mode, "paused">, Record<string, unknown>> = {
   review: { paused: false, replyAutonomy: "review", postAutonomy: "review" },
   assisted: { paused: false, replyAutonomy: "auto", postAutonomy: "review", likesAuto: true },
   autopilot: { paused: false, replyAutonomy: "auto", postAutonomy: "auto", likesAuto: true },
+  growth: {
+    paused: false, replyAutonomy: "auto", postAutonomy: "auto", likesAuto: true,
+    dailyLikeCap: 250, dailyReplyCap: 30, dailyEngageCap: 100, dailyPostCap: 4,
+    quietStartUtc: 5, quietEndUtc: 13,
+  },
 };
 
 export default function XbotAutonomyPreset({
-  paused, replyAutonomy, postAutonomy,
-}: { paused: boolean; replyAutonomy: string; postAutonomy: string }) {
+  paused, replyAutonomy, postAutonomy, dailyLikeCap,
+}: { paused: boolean; replyAutonomy: string; postAutonomy: string; dailyLikeCap: number }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const current: Mode = paused ? "paused"
+    : replyAutonomy === "auto" && postAutonomy === "auto" && dailyLikeCap >= 200 ? "growth"
     : replyAutonomy === "auto" && postAutonomy === "auto" ? "autopilot"
     : replyAutonomy === "auto" ? "assisted"
     : "review";
@@ -47,6 +55,7 @@ export default function XbotAutonomyPreset({
     { mode: "review", label: "Review", hint: "Draft everything, you approve each one" },
     { mode: "assisted", label: "Assisted+", hint: "Auto-like + auto-reply to others; your posts wait for approval" },
     { mode: "autopilot", label: "Autopilot", hint: "Everything posts unattended (safety-gated)" },
+    { mode: "growth", label: "🚀 Growth autopilot", hint: "Autopilot + volume: 250 likes/day, 30 replies/day (bump weekly), 16h active window" },
     { mode: "paused", label: "⏸ Pause", hint: "Stop all engagement now" },
   ];
 
@@ -85,5 +94,9 @@ export default function XbotAutonomyPreset({
 }
 
 function labelFor(m: Mode): string {
-  return m === "paused" ? "Paused" : m === "assisted" ? "Assisted+" : m === "autopilot" ? "Autopilot" : "Review";
+  return m === "paused" ? "Paused"
+    : m === "assisted" ? "Assisted+"
+    : m === "autopilot" ? "Autopilot"
+    : m === "growth" ? "Growth autopilot"
+    : "Review";
 }
