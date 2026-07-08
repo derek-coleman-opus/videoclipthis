@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db, xbotActions, xbotTweets } from "@/lib/db";
 import { logEvent } from "@/lib/pipeline/events";
-import { slog } from "@/lib/pipeline/util";
+import { sleep, slog } from "@/lib/pipeline/util";
 import { HARVEST_QUERIES_PER_RUN, HARVEST_MAX_PER_RUN, SEARCH_MAX_RESULTS } from "./config";
 import { describeXbotError, xbotRw } from "./client";
 import { countActionsSince, countActionsToday, hourlyCap, inQuietHours } from "./guards";
@@ -10,6 +10,12 @@ import { getXbotSettings, parseKeywords, updateXbotSettings } from "./settings";
 /** Hard ceiling per run so a single invocation never bursts a pile of likes. The xbot-post cron
  *  runs every 15 min, so 4 runs/hour × this = the max like throughput (hourly cap still applies). */
 const LIKES_PER_RUN = Number(process.env.XBOT_LIKES_PER_RUN ?? 8);
+
+/** Random pause BETWEEN consecutive likes in a run, so timestamps spread like a human scrolling
+ *  a feed instead of 8 likes in the same second. Worst case (LIKES_PER_RUN-1) × max = ~175s,
+ *  safely inside the 300s route budget shared with draft posting. */
+const LIKE_JITTER_MIN_S = Number(process.env.XBOT_LIKE_JITTER_MIN_S ?? 10);
+const LIKE_JITTER_MAX_S = Number(process.env.XBOT_LIKE_JITTER_MAX_S ?? 25);
 
 export interface LikeResult {
   liked: number;
@@ -50,6 +56,11 @@ export async function runLikes(): Promise<LikeResult> {
   let liked = 0;
   for (const tw of candidates) {
     try {
+      // Human-like spacing between likes (skip before the first).
+      if (liked > 0) {
+        const jitterMs = (LIKE_JITTER_MIN_S + Math.random() * Math.max(0, LIKE_JITTER_MAX_S - LIKE_JITTER_MIN_S)) * 1000;
+        await sleep(jitterMs);
+      }
       await client.v2.like(meId, tw.tweetId);
       await database.update(xbotTweets).set({ liked: true, likedAt: new Date() }).where(eq(xbotTweets.id, tw.id));
       await database.insert(xbotActions).values({ kind: "like", targetId: tw.targetId, tweetId: tw.tweetId });
