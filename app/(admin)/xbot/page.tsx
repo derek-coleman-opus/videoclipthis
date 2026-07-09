@@ -4,6 +4,7 @@ import { db, events, xbotActions, xbotDrafts, xbotTargets } from "@/lib/db";
 import { getXbotSettings, parseSetupChecklist } from "@/lib/xbot/settings";
 import { hasXbotWriteEnv } from "@/lib/xbot/env";
 import { inQuietHours } from "@/lib/xbot/guards";
+import { COMPONENT_LABEL, failingComponents, fetchXUsage, getXbotHealth, type XbotComponent } from "@/lib/xbot/health";
 import { TARGET_ROSTER_GOAL } from "@/lib/xbot/config";
 import { SETUP_ITEMS } from "@/lib/xbot/playbook";
 import { timeAgo } from "@/lib/timeago";
@@ -22,9 +23,10 @@ export default async function XbotPage() {
   } catch (e) {
     return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
   }
-  const { settings, today, pending, targetCount, engagedBack, feed, hasCreds, setupDone, lastActionAt } = data;
+  const { settings, today, pending, targetCount, engagedBack, feed, hasCreds, setupDone, lastActionAt, failing, likesStalled, usage } = data;
   const notReady = !settings.voiceNotes?.trim() || !settings.mission?.trim();
   const quietNow = inQuietHours(settings);
+  const usagePct = usage.used != null && usage.cap ? Math.round((usage.used / usage.cap) * 100) : null;
 
   const stats: Array<[string, string]> = [
     ["Replies today", `${today.reply} / ${settings.dailyReplyCap}`],
@@ -32,6 +34,9 @@ export default async function XbotPage() {
     ["Likes today", `${today.like} / ${settings.dailyLikeCap}`],
     ["Posts today", `${today.post} / ${settings.dailyPostCap}`],
     ["Last action", lastActionAt ? timeAgo(lastActionAt) : "never"],
+    ["X API reads", usage.used != null
+      ? `${usage.used.toLocaleString()}${usage.cap ? ` / ${usage.cap.toLocaleString()}` : ""}${usagePct != null ? ` (${usagePct}%)` : ""}`
+      : "unavailable"],
     ["Pending review", String(pending)],
     ["Target roster", `${targetCount} / ${TARGET_ROSTER_GOAL}+`],
     ["Engaged back", String(engagedBack)],
@@ -49,6 +54,33 @@ export default async function XbotPage() {
           )}
         </div>
       </div>
+
+      {/* Component failures: the bot must never silently stop. Anything whose latest run
+          errored shows here with a plain-English reason (usage cap, billing, rate limit…). */}
+      {failing.length > 0 && (
+        <div className="mb-4 rounded-lg border border-red-800 bg-red-950/50 p-3 text-sm text-red-200">
+          <p className="mb-1 font-semibold">🚨 {failing.length} component(s) failing — this is why activity stopped:</p>
+          <ul className="space-y-1 text-xs">
+            {failing.map((f) => (
+              <li key={f.component}>
+                <b>{COMPONENT_LABEL[f.component as XbotComponent] ?? f.component}</b>
+                {f.consecutiveErrors > 1 && <span className="text-red-400"> ({f.consecutiveErrors} runs in a row)</span>}
+                {" — "}{f.lastError || "unknown error"}
+                <span className="text-red-400"> · {f.lastErrorAt ? timeAgo(f.lastErrorAt) : ""}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Stall detector: likes should fire every ~15 min during active hours. Silence with no
+          recorded error usually means the like SUPPLY dried up (harvest/outbound failing). */}
+      {likesStalled && failing.length === 0 && (
+        <div className="mb-4 rounded-lg border border-amber-800 bg-amber-950/40 p-3 text-sm text-amber-200">
+          ⚠ <b>Likes have stalled</b> — no like in over 90 minutes during active hours with auto-like
+          on. Check the like supply (harvest/outbound health) and /api/admin/diagnostics.
+        </div>
+      )}
 
       {/* State banner: when the bot cannot act, say so LOUDLY and say exactly why. A paused
           default once no-opped every cron for days with nothing but a tiny badge. */}
@@ -85,7 +117,15 @@ export default async function XbotPage() {
         </div>
       )}
 
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
+      {usagePct != null && usagePct >= 85 && (
+        <div className="mb-4 rounded-lg border border-red-800 bg-red-950/50 p-3 text-sm text-red-200">
+          🔋 <b>X API usage at {usagePct}%</b> ({usage.used?.toLocaleString()} of {usage.cap?.toLocaleString()} reads
+          this month{usage.resetDay ? `, resets on day ${usage.resetDay}` : ""}). When it hits 100% the bot
+          stops reading timelines/search — top up or upgrade the X API plan before then.
+        </div>
+      )}
+
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {stats.map(([label, value]) => (
           <div key={label} className="rounded-lg border border-neutral-800 p-3">
             <div className="text-xs text-neutral-500">{label}</div>
@@ -169,9 +209,28 @@ async function load() {
     .orderBy(desc(xbotActions.createdAt))
     .limit(1))[0];
 
+  // Health + usage: what's failing (with plain-English reasons) and how close the X API
+  // read budget is to running out. Both best-effort — the dashboard must render regardless.
+  const health = await getXbotHealth().catch(() => []);
+  const failing = failingComponents(health);
+  const usage = await fetchXUsage();
+
+  // Stall detector: likes should fire every ~15 min during active hours.
+  const lastLike = (await database
+    .select({ createdAt: xbotActions.createdAt })
+    .from(xbotActions)
+    .where(eq(xbotActions.kind, "like"))
+    .orderBy(desc(xbotActions.createdAt))
+    .limit(1))[0];
+  const likesStalled = Boolean(
+    !settings.paused && settings.likesAuto && hasXbotWriteEnv() && !inQuietHours(settings) &&
+    (!lastLike?.createdAt || Date.now() - lastLike.createdAt.getTime() > 90 * 60 * 1000),
+  );
+
   return {
     settings, today, pending, targetCount, engagedBack, feed,
     lastActionAt: lastAction?.createdAt ?? null,
+    failing, likesStalled, usage,
     hasCreds: hasXbotWriteEnv(),
     setupDone: parseSetupChecklist(settings).filter((id) => SETUP_ITEMS.some((i) => i.id === id)).length,
   };

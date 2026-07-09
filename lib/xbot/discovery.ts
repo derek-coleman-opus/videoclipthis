@@ -7,6 +7,7 @@ import {
 } from "./config";
 import { describeXbotError, xbotRw } from "./client";
 import { scoreAccount } from "./drafting";
+import { reportHealth } from "./health";
 import { getXbotSettings, parseKeywords } from "./settings";
 
 export interface DiscoveryResult {
@@ -32,6 +33,17 @@ interface Candidate {
  *  roster is full; per-run caps bound Claude cost and X search quota. Reuses the OAuth1.0a client
  *  (recent search works in user context), so it needs only the XBOT_* write tokens. */
 export async function runDiscovery(): Promise<DiscoveryResult> {
+  try {
+    const result = await runDiscoveryInner();
+    await reportHealth("discover", true);
+    return result;
+  } catch (e) {
+    await reportHealth("discover", false, (e as Error).message);
+    throw e;
+  }
+}
+
+async function runDiscoveryInner(): Promise<DiscoveryResult> {
   const settings = await getXbotSettings();
   const database = db();
   const client = await xbotRw();

@@ -10,6 +10,7 @@ import { draftReply } from "./drafting";
 import { expireStaleDrafts } from "./engagement";
 import { fullTweetText, FULL_TWEET_FIELDS, FULL_TWEET_EXPANSIONS, type RawTweet, type TweetIncludes } from "./fulltext";
 import { isDuplicateText, lowValueReason, targetInCooldown } from "./guards";
+import { reportHealth } from "./health";
 import { getXbotSettings } from "./settings";
 
 export interface OutboundResult {
@@ -66,6 +67,7 @@ export async function checkOutbound(): Promise<OutboundResult> {
     .limit(OUTBOUND_TARGETS_PER_RUN * 4);
 
   const freshCutoff = Date.now() - OUTBOUND_TWEET_MAX_AGE_HOURS * 3600 * 1000;
+  let lastError: string | null = null;
 
   for (const target of roster) {
     if (result.checked >= OUTBOUND_TARGETS_PER_RUN) break;
@@ -167,10 +169,16 @@ export async function checkOutbound(): Promise<OutboundResult> {
       await database.update(xbotTweets).set({ status: "drafted" }).where(eq(xbotTweets.id, tweetRef.id));
       result.drafted++;
     } catch (e) {
-      slog("xbot_outbound_target_error", { handle: target.handle, error: (e as Error).message });
+      lastError = (e as Error).message;
+      slog("xbot_outbound_target_error", { handle: target.handle, error: lastError });
       result.skipped++;
     }
   }
+
+  // Health: if there was a roster to read but ZERO timelines could be read and we saw errors,
+  // the reads are down (usage cap / rate limit) — the reply pipeline AND like supply are stalled.
+  const readsDown = roster.length > 0 && result.checked === 0 && lastError !== null;
+  await reportHealth("outbound", !readsDown, readsDown ? lastError ?? undefined : undefined);
 
   await logEvent(
     "xbot_outbound",

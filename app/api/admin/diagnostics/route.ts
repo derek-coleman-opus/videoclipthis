@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { failingComponents, fetchXUsage, getXbotHealth } from "@/lib/xbot/health";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -21,6 +22,7 @@ const REQUIRED_COLUMNS: [string, string][] = [
   ["settings", "x_bot_user_id"],
   ["settings", "figure_search_at"],
   ["candidates", "opus_project_id"],
+  ["xbot_tweets", "view_count"],
 ];
 const REQUIRED_TABLES = ["candidates", "clips", "settings", "runs", "events", "summon_requests", "figures"];
 
@@ -112,6 +114,25 @@ export async function GET() {
     }));
     report.anthropic = { ok: r.ok, status: r.status };
     if (!r.ok) problems.push(`Anthropic API: HTTP ${r.status} ${r.detail}`);
+  }
+
+  // 7. XBot: component health (why did it stop), like-supply backlog, and X read-budget usage.
+  try {
+    const health = await getXbotHealth();
+    const failing = failingComponents(health);
+    const backlog: any = await db().execute(
+      sql`SELECT count(*)::int AS n FROM xbot_tweets WHERE liked = false AND found_via IN ('roster','inbound','search')`,
+    );
+    report.xbot = {
+      health,
+      unlikedBacklog: Number((backlog.rows ?? backlog)[0]?.n ?? 0),
+      usage: await fetchXUsage(),
+    };
+    for (const f of failing) {
+      problems.push(`xbot ${f.component} failing (${f.consecutiveErrors}×): ${f.lastError}`);
+    }
+  } catch (e) {
+    report.xbot = { error: (e as Error).message };
   }
 
   report.problems = problems;

@@ -6,6 +6,7 @@ import { describeXbotError, xbotRw } from "./client";
 import { draftEngageBack } from "./drafting";
 import { fullTweetText, type TweetIncludes } from "./fulltext";
 import { isDuplicateText } from "./guards";
+import { reportHealth } from "./health";
 import { getXbotSettings, updateXbotSettings } from "./settings";
 
 export interface InboundResult {
@@ -14,12 +15,24 @@ export interface InboundResult {
   skipped: number;
 }
 
-/** "Reply to everyone who engages with your posts": pull new mentions — replies to our
- *  posts AND replies to our replies both land in the mentions timeline — record each
- *  engager's comment, and queue a Claude-drafted engage-back for review. The cursor
- *  lives in xbot_settings.mentionsSinceId so each run only sees new engagement;
- *  failed drafts stay status "found" and are retried on the next run. */
+/** "Reply to everyone who engages with your posts" — health-reported wrapper so an API
+ *  failure (usage cap, rate limit) surfaces on the dashboard instead of only in logs. */
 export async function checkInbound(): Promise<InboundResult> {
+  try {
+    const result = await checkInboundInner();
+    await reportHealth("inbound", true);
+    return result;
+  } catch (e) {
+    await reportHealth("inbound", false, (e as Error).message);
+    throw e;
+  }
+}
+
+/** Pull new mentions — replies to our posts AND replies to our replies both land in the
+ *  mentions timeline — record each engager's comment, and queue a Claude-drafted engage-back
+ *  for review. The cursor lives in xbot_settings.mentionsSinceId so each run only sees new
+ *  engagement; failed drafts stay status "found" and are retried on the next run. */
+async function checkInboundInner(): Promise<InboundResult> {
   const settings = await getXbotSettings();
   const database = db();
   const client = await xbotRw();

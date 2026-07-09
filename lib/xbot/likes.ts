@@ -5,6 +5,7 @@ import { sleep, slog } from "@/lib/pipeline/util";
 import { HARVEST_QUERIES_PER_RUN, HARVEST_MAX_PER_RUN, SEARCH_MAX_RESULTS } from "./config";
 import { describeXbotError, xbotRw } from "./client";
 import { countActionsSince, countActionsToday, hourlyCap, inQuietHours } from "./guards";
+import { reportHealth } from "./health";
 import { getXbotSettings, parseKeywords, updateXbotSettings } from "./settings";
 
 /** Hard ceiling per run so a single invocation never bursts a pile of likes. The xbot-post cron
@@ -54,6 +55,7 @@ export async function runLikes(): Promise<LikeResult> {
   }
 
   let liked = 0;
+  let likeError: string | null = null;
   for (const tw of candidates) {
     try {
       // Human-like spacing between likes (skip before the first).
@@ -67,10 +69,14 @@ export async function runLikes(): Promise<LikeResult> {
       liked++;
     } catch (e) {
       // Likely a rate limit or a deleted tweet — stop this run rather than hammer the API.
-      slog("xbot_like_error", { tweetId: tw.tweetId, error: (e as Error).message });
+      likeError = (e as Error).message;
+      slog("xbot_like_error", { tweetId: tw.tweetId, error: likeError });
       break;
     }
   }
+  // Health: an errored run (even with partial likes) must surface — this is exactly the
+  // "silently stopped 10 hours ago" failure mode.
+  await reportHealth("likes", likeError === null, likeError ?? undefined);
   if (liked) await logEvent("xbot_liked", `Auto-liked ${liked} tweet(s)`);
   slog("xbot_likes", { liked });
   return { liked };
@@ -124,6 +130,7 @@ export async function harvestSearchTweets(): Promise<HarvestResult> {
   const client = await xbotRw();
   const meId = settings.xbotUserId;
   const result: HarvestResult = { searched: 0, stored: 0 };
+  let lastError: string | null = null;
 
   for (const kw of queries) {
     if (result.stored >= HARVEST_MAX_PER_RUN) break;
@@ -162,9 +169,15 @@ export async function harvestSearchTweets(): Promise<HarvestResult> {
         result.stored += inserted.length;
       }
     } catch (e) {
-      slog("xbot_harvest_error", { query: kw, error: (e as Error).message });
+      lastError = (e as Error).message;
+      slog("xbot_harvest_error", { query: kw, error: lastError });
     }
   }
+
+  // Health: failing means the like supply dries up quietly — every query erroring is a real
+  // outage (usage cap / rate limit); partial success still counts as ok.
+  const allFailed = queries.length > 0 && result.searched === 0 && lastError !== null;
+  await reportHealth("harvest", !allFailed, allFailed ? lastError ?? undefined : undefined);
 
   slog("xbot_harvest", { ...result });
   return result;
