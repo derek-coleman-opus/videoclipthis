@@ -30,6 +30,17 @@ const STATEMENTS: string[] = [
   // clips: retriable publish failures carry their reason (migration 0010)
   `ALTER TABLE "clips" ADD COLUMN IF NOT EXISTS "fail_reason" text DEFAULT ''`,
   `ALTER TABLE "xbot_tweets" ADD COLUMN IF NOT EXISTS "view_count" integer DEFAULT 0`,
+  // xbot: per-component health ledger (the "why did it stop" table)
+  `CREATE TABLE IF NOT EXISTS "xbot_health" (
+     "id" serial PRIMARY KEY NOT NULL,
+     "component" text NOT NULL,
+     "last_run_at" timestamp with time zone,
+     "last_ok_at" timestamp with time zone,
+     "last_error_at" timestamp with time zone,
+     "last_error" text DEFAULT '',
+     "consecutive_errors" integer NOT NULL DEFAULT 0
+   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "xbot_health_component_idx" ON "xbot_health" ("component")`,
   // figures: DB-backed tracked-people table
   `CREATE TABLE IF NOT EXISTS "figures" (
      "id" serial PRIMARY KEY NOT NULL,

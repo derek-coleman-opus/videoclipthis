@@ -247,6 +247,20 @@ export const xbotSettings = pgTable("xbot_settings", {
   updatedAt: ts("updated_at").defaultNow(),
 });
 
+/** Per-component XBot health: one row per worker, upserted every run — the "why did it stop"
+ *  ledger the dashboard reads. A component whose lastErrorAt > lastOkAt is currently failing. */
+export const xbotHealth = pgTable("xbot_health", {
+  id: serial("id").primaryKey(),
+  component: text("component").notNull(),              // outbound|harvest|likes|posting|inbound|discover
+  lastRunAt: ts("last_run_at"),
+  lastOkAt: ts("last_ok_at"),
+  lastErrorAt: ts("last_error_at"),
+  lastError: text("last_error").default(""),
+  consecutiveErrors: integer("consecutive_errors").notNull().default(0),
+}, (t) => ({
+  componentIdx: uniqueIndex("xbot_health_component_idx").on(t.component),
+}));
+
 export type Candidate = typeof candidates.$inferSelect;
 export type NewCandidate = typeof candidates.$inferInsert;
 export type Clip = typeof clips.$inferSelect;
@@ -262,3 +276,4 @@ export type XbotDraft = typeof xbotDrafts.$inferSelect;
 export type NewXbotDraft = typeof xbotDrafts.$inferInsert;
 export type XbotAction = typeof xbotActions.$inferSelect;
 export type XbotSettings = typeof xbotSettings.$inferSelect;
+export type XbotHealth = typeof xbotHealth.$inferSelect;

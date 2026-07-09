@@ -4,6 +4,7 @@ import { logEvent } from "@/lib/pipeline/events";
 import { slog } from "@/lib/pipeline/util";
 import { hasXbotWriteEnv } from "./env";
 import { postDraft } from "./engagement";
+import { reportHealth } from "./health";
 import { assessAutoPost } from "./safety";
 import { runLikes } from "./likes";
 import { inQuietHours, pacingViolation, underCap } from "./guards";
@@ -33,6 +34,7 @@ export async function runPostingDue(): Promise<PostingResult> {
   if (!hasXbotWriteEnv()) return { ...result, skipped: "no credentials" };
 
   // Posting waits for active hours; likes self-gate on quiet hours below.
+  let postError: string | null = null;
   if (!inQuietHours(settings)) {
     const database = db();
     const drafts = await database.select().from(xbotDrafts)
@@ -67,11 +69,15 @@ export async function runPostingDue(): Promise<PostingResult> {
         await postDraft(draft);
         result.posted++;
       } catch (e) {
-        // postDraft marks the draft failed + logs its own error; nothing more to do here.
-        slog("xbot_posting_error", { draftId: draft.id, error: (e as Error).message });
+        // postDraft marks the draft failed + logs its own error; health tracks the pattern.
+        postError = (e as Error).message;
+        slog("xbot_posting_error", { draftId: draft.id, error: postError });
       }
     }
   }
+  // Health: a run where posting attempts errored (and none succeeded) means auto-replies are
+  // down — the exact silent failure the operator kept hitting on approve.
+  await reportHealth("posting", !(postError !== null && result.posted === 0), postError ?? undefined);
 
   const likes = await runLikes();
   result.liked = likes.liked;

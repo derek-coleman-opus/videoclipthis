@@ -161,4 +161,16 @@ BEGIN
   UPDATE "xbot_settings" SET "daily_post_cap" = 3 WHERE "id" = 1 AND "daily_post_cap" = 2;
   UPDATE "xbot_settings" SET "quiet_start_utc" = 22, "quiet_end_utc" = 14
     WHERE "id" = 1 AND "quiet_start_utc" = 4 AND "quiet_end_utc" = 12;
+
+  -- ── xbot_health: per-component health ledger (the "why did it stop" table) ──
+  CREATE TABLE IF NOT EXISTS "xbot_health" (
+    "id" serial PRIMARY KEY NOT NULL,
+    "component" text NOT NULL,
+    "last_run_at" timestamp with time zone,
+    "last_ok_at" timestamp with time zone,
+    "last_error_at" timestamp with time zone,
+    "last_error" text DEFAULT '',
+    "consecutive_errors" integer DEFAULT 0 NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS "xbot_health_component_idx" ON "xbot_health" ("component");
 END $$;
