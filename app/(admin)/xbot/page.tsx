@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { and, desc, eq, gte, like } from "drizzle-orm";
-import { db, events, xbotActions, xbotDrafts, xbotTargets } from "@/lib/db";
+import { db, events, xbotActions, xbotDrafts, xbotTargets, xbotTweets } from "@/lib/db";
 import { getXbotSettings, parseSetupChecklist } from "@/lib/xbot/settings";
 import { hasXbotWriteEnv } from "@/lib/xbot/env";
 import { inQuietHours } from "@/lib/xbot/guards";
@@ -23,7 +23,7 @@ export default async function XbotPage() {
   } catch (e) {
     return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
   }
-  const { settings, today, pending, targetCount, engagedBack, feed, hasCreds, setupDone, lastActionAt, failing, likesStalled, usage } = data;
+  const { settings, today, pending, targetCount, engagedBack, feed, hasCreds, setupDone, lastActionAt, failing, likesStalled, unlikedBacklog, usage } = data;
   const notReady = !settings.voiceNotes?.trim() || !settings.mission?.trim();
   const quietNow = inQuietHours(settings);
   const usagePct = usage.used != null && usage.cap ? Math.round((usage.used / usage.cap) * 100) : null;
@@ -77,8 +77,14 @@ export default async function XbotPage() {
           recorded error usually means the like SUPPLY dried up (harvest/outbound failing). */}
       {likesStalled && failing.length === 0 && (
         <div className="mb-4 rounded-lg border border-amber-800 bg-amber-950/40 p-3 text-sm text-amber-200">
-          ⚠ <b>Likes have stalled</b> — no like in over 90 minutes during active hours with auto-like
-          on. Check the like supply (harvest/outbound health) and /api/admin/diagnostics.
+          ⚠ <b>Likes have stalled</b> — no like in over 90 minutes during active hours with auto-like on.{" "}
+          {unlikedBacklog === 0 ? (
+            <>The like queue is <b>empty</b>: harvest/outbound aren't finding new posts to like —
+            check their health rows and the keyword list in XBot Settings.</>
+          ) : (
+            <>The like queue has <b>{unlikedBacklog}</b> tweet(s) waiting but none are being liked —
+            the likes worker itself is stuck; check /api/admin/diagnostics.</>
+          )}
         </div>
       )}
 
@@ -227,10 +233,17 @@ async function load() {
     (!lastLike?.createdAt || Date.now() - lastLike.createdAt.getTime() > 90 * 60 * 1000),
   );
 
+  // Like-supply backlog: 0 during a stall = supply problem (harvest/outbound); >0 = drain problem.
+  const unlikedBacklog = (await database
+    .select({ id: xbotTweets.id })
+    .from(xbotTweets)
+    .where(eq(xbotTweets.liked, false))
+    .limit(500)).length;
+
   return {
     settings, today, pending, targetCount, engagedBack, feed,
     lastActionAt: lastAction?.createdAt ?? null,
-    failing, likesStalled, usage,
+    failing, likesStalled, unlikedBacklog, usage,
     hasCreds: hasXbotWriteEnv(),
     setupDone: parseSetupChecklist(settings).filter((id) => SETUP_ITEMS.some((i) => i.id === id)).length,
   };

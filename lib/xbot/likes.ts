@@ -28,15 +28,22 @@ export interface LikeResult {
  *  and the derived hourly cap so likes trickle out like a human's, not in a burst. Records each
  *  like in the action ledger. */
 export async function runLikes(): Promise<LikeResult> {
+  // A benign skip is still a healthy RUN — report it, so "running but idle" (empty supply,
+  // caps, quiet hours) is distinguishable from "not running at all" on the health ledger.
+  const healthySkip = async (result: LikeResult): Promise<LikeResult> => {
+    await reportHealth("likes", true);
+    return result;
+  };
+
   const settings = await getXbotSettings();
-  if (!settings.likesAuto) return { liked: 0, skipped: "likesAuto off" };
-  if (inQuietHours(settings)) return { liked: 0, skipped: "quiet hours" };
+  if (!settings.likesAuto) return healthySkip({ liked: 0, skipped: "likesAuto off" });
+  if (inQuietHours(settings)) return healthySkip({ liked: 0, skipped: "quiet hours" });
 
   const remainingDaily = settings.dailyLikeCap - (await countActionsToday("like"));
-  if (remainingDaily <= 0) return { liked: 0, skipped: "daily like cap reached" };
+  if (remainingDaily <= 0) return healthySkip({ liked: 0, skipped: "daily like cap reached" });
   const remainingHour = hourlyCap(settings.dailyLikeCap, settings) - (await countActionsSince("like", new Date(Date.now() - 3600_000)));
   const budget = Math.max(0, Math.min(LIKES_PER_RUN, remainingDaily, remainingHour));
-  if (budget <= 0) return { liked: 0, skipped: "hourly like cap reached" };
+  if (budget <= 0) return healthySkip({ liked: 0, skipped: "hourly like cap reached" });
 
   const database = db();
   const candidates = await database
@@ -44,7 +51,7 @@ export async function runLikes(): Promise<LikeResult> {
     .where(and(eq(xbotTweets.liked, false), inArray(xbotTweets.foundVia, ["roster", "inbound", "search"])))
     .orderBy(desc(xbotTweets.tweetedAt))
     .limit(budget);
-  if (!candidates.length) return { liked: 0, skipped: "nothing new to like" };
+  if (!candidates.length) return healthySkip({ liked: 0, skipped: "nothing new to like" });
 
   const client = await xbotRw();
   let meId = settings.xbotUserId;
@@ -105,11 +112,17 @@ export interface HarvestResult {
  *  the keyword list across runs (same pattern as runDiscovery); dedup via the unique tweet_id
  *  index. Storing is not liking: pacing/caps stay entirely in runLikes. */
 export async function harvestSearchTweets(): Promise<HarvestResult> {
+  // Benign skips still count as healthy runs on the ledger (see runLikes).
+  const healthySkip = async (result: HarvestResult): Promise<HarvestResult> => {
+    await reportHealth("harvest", true);
+    return result;
+  };
+
   const settings = await getXbotSettings();
-  if (!settings.likesAuto) return { searched: 0, stored: 0, skipped: "likesAuto off" };
+  if (!settings.likesAuto) return healthySkip({ searched: 0, stored: 0, skipped: "likesAuto off" });
 
   const keywords = parseKeywords(settings);
-  if (!keywords.length) return { searched: 0, stored: 0, skipped: "no keywords configured" };
+  if (!keywords.length) return healthySkip({ searched: 0, stored: 0, skipped: "no keywords configured" });
 
   // Don't over-harvest: if the unliked backlog already covers a day at the current cap,
   // skip the search spend this run.
@@ -119,7 +132,7 @@ export async function harvestSearchTweets(): Promise<HarvestResult> {
     .where(and(eq(xbotTweets.liked, false), inArray(xbotTweets.foundVia, ["roster", "inbound", "search"])))
     .limit(settings.dailyLikeCap);
   if (backlog.length >= settings.dailyLikeCap) {
-    return { searched: 0, stored: 0, skipped: "like backlog full" };
+    return healthySkip({ searched: 0, stored: 0, skipped: "like backlog full" });
   }
 
   // Rotate which keywords run each invocation so the whole list gets coverage over the day.
