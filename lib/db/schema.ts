@@ -244,6 +244,8 @@ export const xbotSettings = pgTable("xbot_settings", {
   productUrl: text("product_url").default(""),                       // linked in plug replies under traction posts
   communityId: text("community_id").default(""),                     // X community to post into (small-account reach)
   setupChecklist: text("setup_checklist").notNull().default("[]"),   // JSON array of completed playbook item ids
+  lockDetectedAt: ts("lock_detected_at"),                            // when an X account lock last tripped the circuit breaker
+  lockReason: text("lock_reason").default(""),                       // the X error that tripped it
   updatedAt: ts("updated_at").defaultNow(),
 });
 

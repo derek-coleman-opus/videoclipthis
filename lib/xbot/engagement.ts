@@ -5,6 +5,7 @@ import { slog } from "@/lib/pipeline/util";
 import { describeXbotError, xbotRw } from "./client";
 import { getXbotSettings } from "./settings";
 import { pacingViolation, underCap } from "./guards";
+import { effectiveCaps, inLockFreeze, isAccountLockError, tripAccountLock } from "./limits";
 import { DRAFT_TTL_H } from "./config";
 
 /** Expire pending drafts older than the TTL — the tweet they reply to has gone stale, so we
@@ -35,8 +36,11 @@ export async function postDraft(draft: XbotDraft): Promise<PostOutcome> {
   // replying to everyone never competes with the outbound growth-reply budget.
   const isReply = ["reply", "followup", "plug", "engage"].includes(draft.kind);
   const capKind = draft.kind === "engage" ? "engage" : isReply ? "reply" : "post";
-  const cap = draft.kind === "engage" ? settings.dailyEngageCap
-    : isReply ? settings.dailyReplyCap : settings.dailyPostCap;
+  if (inLockFreeze(settings)) {
+    throw new Error("post-lock freeze: no writes for 48h after an account lock — complete verification on x.com first");
+  }
+  const caps = await effectiveCaps(settings);
+  const cap = draft.kind === "engage" ? caps.engage : isReply ? caps.reply : caps.post;
   if (!(await underCap(capKind, cap))) {
     throw new Error(`daily ${capKind} cap (${cap}) reached — try again tomorrow or raise the cap`);
   }
@@ -81,6 +85,8 @@ export async function postDraft(draft: XbotDraft): Promise<PostOutcome> {
   } catch (e) {
     await database.update(xbotDrafts).set({ status: "failed" }).where(eq(xbotDrafts.id, draft.id));
     await logEvent("xbot_error", `Post failed for draft #${draft.id}: ${(e as Error).message}`, "xbot_drafts", draft.id);
+    // Account locked/suspended → circuit breaker: pause the whole bot immediately.
+    if (isAccountLockError((e as Error).message)) await tripAccountLock((e as Error).message);
     throw e;
   }
 }

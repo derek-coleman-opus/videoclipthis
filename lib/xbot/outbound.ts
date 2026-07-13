@@ -51,9 +51,10 @@ function worthReplyingTo(text: string): boolean {
  *  earlier draft waits for approval. The daily reply cap + pacing still gate posting. */
 export async function checkOutbound(): Promise<OutboundResult> {
   const settings = await getXbotSettings();
+  const result: OutboundResult = { checked: 0, queuedLikes: 0, drafted: 0, skipped: 0 };
+  if (settings.paused) return result;
   const database = db();
   const client = await xbotRw();
-  const result: OutboundResult = { checked: 0, queuedLikes: 0, drafted: 0, skipped: 0 };
 
   // Purge stale pending drafts first — never post a day-late reply, and keep the queue clean.
   await expireStaleDrafts();

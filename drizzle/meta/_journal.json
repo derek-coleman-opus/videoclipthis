@@ -99,6 +99,13 @@
       "when": 1783605590476,
       "tag": "0013_tricky_the_call",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1783949664352,
+      "tag": "0014_strange_solo",
+      "breakpoints": true
     }
   ]
 }

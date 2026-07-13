@@ -5,6 +5,7 @@ import { getXbotSettings, parseSetupChecklist } from "@/lib/xbot/settings";
 import { hasXbotWriteEnv } from "@/lib/xbot/env";
 import { inQuietHours } from "@/lib/xbot/guards";
 import { COMPONENT_LABEL, failingComponents, fetchXUsage, getXbotHealth, type XbotComponent } from "@/lib/xbot/health";
+import { effectiveCaps } from "@/lib/xbot/limits";
 import { TARGET_ROSTER_GOAL } from "@/lib/xbot/config";
 import { SETUP_ITEMS } from "@/lib/xbot/playbook";
 import { timeAgo } from "@/lib/timeago";
@@ -23,7 +24,7 @@ export default async function XbotPage() {
   } catch (e) {
     return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
   }
-  const { settings, today, pending, targetCount, engagedBack, feed, hasCreds, setupDone, lastActionAt, failing, likesStalled, unlikedBacklog, usage } = data;
+  const { settings, today, pending, targetCount, engagedBack, feed, hasCreds, setupDone, lastActionAt, failing, likesStalled, unlikedBacklog, usage, caps } = data;
   const notReady = !settings.voiceNotes?.trim() || !settings.mission?.trim();
   const quietNow = inQuietHours(settings);
   const usagePct = usage.used != null && usage.cap ? Math.round((usage.used / usage.cap) * 100) : null;
@@ -54,6 +55,24 @@ export default async function XbotPage() {
           )}
         </div>
       </div>
+
+      {/* Account lock: the worst-case failure. The circuit breaker paused the bot the moment
+          a write came back "account locked" — recovery is manual and must not be rushed. */}
+      {settings.lockDetectedAt && (
+        <div className="mb-4 rounded-lg border-2 border-red-600 bg-red-950/70 p-4 text-sm text-red-100">
+          <p className="mb-2 text-base font-bold">🔒 X ACCOUNT LOCK detected {timeAgo(settings.lockDetectedAt)} — the bot paused itself.</p>
+          <ol className="ml-4 list-decimal space-y-1 text-xs">
+            <li>Log into <b>x.com</b> and complete the verification challenge (phone/captcha).</li>
+            <li>Leave the bot paused for <b>~48h</b> after unlocking — writes are frozen in code for
+              48h from detection anyway, even if unpaused.</li>
+            <li>Unpause when ready: caps auto-run at <b>25%</b> for the first week and <b>50%</b> the
+              second — don&apos;t raise them.</li>
+          </ol>
+          {settings.lockReason ? (
+            <p className="mt-2 text-xs text-red-300">X said: {settings.lockReason.slice(0, 300)}</p>
+          ) : null}
+        </div>
+      )}
 
       {/* Component failures: the bot must never silently stop. Anything whose latest run
           errored shows here with a plain-English reason (usage cap, billing, rate limit…). */}
@@ -90,7 +109,7 @@ export default async function XbotPage() {
 
       {/* State banner: when the bot cannot act, say so LOUDLY and say exactly why. A paused
           default once no-opped every cron for days with nothing but a tiny badge. */}
-      {settings.paused ? (
+      {settings.paused && !settings.lockDetectedAt ? (
         <div className="mb-4 rounded-lg border border-red-800 bg-red-950/50 p-3 text-sm text-red-200">
           <b>⏸ XBot is PAUSED — the crons are firing but doing nothing.</b> No likes, no replies,
           no posts until you pick an autonomy mode below (🚀 Growth autopilot for the volume push).
@@ -107,6 +126,17 @@ export default async function XbotPage() {
           posts hold until the window ends.
         </div>
       ) : null}
+
+      {/* Throttled caps: when the ramp or post-lock cooldown is scaling caps down, show the
+          numbers actually enforced today so the configured caps aren't mistaken for reality. */}
+      {caps.throttleNote && !settings.paused && (
+        <div className="mb-4 rounded-lg border border-sky-800 bg-sky-950/40 p-3 text-xs text-sky-200">
+          🛡 <b>Caps throttled — {caps.throttleNote}.</b> Enforced today: {caps.like} likes,{" "}
+          {caps.reply} replies, {caps.engage} engage-backs, {caps.post} posts
+          (configured: {settings.dailyLikeCap}/{settings.dailyReplyCap}/{settings.dailyEngageCap}/{settings.dailyPostCap}).
+          This is deliberate account protection after the lock — it scales back up automatically.
+        </div>
+      )}
 
       <XbotAutonomyPreset
         paused={settings.paused}
@@ -240,10 +270,13 @@ async function load() {
     .where(eq(xbotTweets.liked, false))
     .limit(500)).length;
 
+  // The caps the workers are actually enforcing today (hard ceilings × ramp × post-lock).
+  const caps = await effectiveCaps(settings);
+
   return {
     settings, today, pending, targetCount, engagedBack, feed,
     lastActionAt: lastAction?.createdAt ?? null,
-    failing, likesStalled, unlikedBacklog, usage,
+    failing, likesStalled, unlikedBacklog, usage, caps,
     hasCreds: hasXbotWriteEnv(),
     setupDone: parseSetupChecklist(settings).filter((id) => SETUP_ITEMS.some((i) => i.id === id)).length,
   };

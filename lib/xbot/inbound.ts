@@ -34,6 +34,7 @@ export async function checkInbound(): Promise<InboundResult> {
  *  engagement; failed drafts stay status "found" and are retried on the next run. */
 async function checkInboundInner(): Promise<InboundResult> {
   const settings = await getXbotSettings();
+  if (settings.paused) return { found: 0, drafted: 0, skipped: 0 };
   const database = db();
   const client = await xbotRw();
 

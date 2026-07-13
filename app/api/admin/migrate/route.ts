@@ -41,6 +41,14 @@ const STATEMENTS: string[] = [
      "consecutive_errors" integer NOT NULL DEFAULT 0
    )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "xbot_health_component_idx" ON "xbot_health" ("component")`,
+  // xbot: account-lock circuit breaker (0014) + clamp stored caps to the new hard maxima
+  `ALTER TABLE "xbot_settings" ADD COLUMN IF NOT EXISTS "lock_detected_at" timestamp with time zone`,
+  `ALTER TABLE "xbot_settings" ADD COLUMN IF NOT EXISTS "lock_reason" text DEFAULT ''`,
+  `UPDATE "xbot_settings" SET
+     "daily_like_cap" = LEAST("daily_like_cap", 80),
+     "daily_reply_cap" = LEAST("daily_reply_cap", 20),
+     "daily_engage_cap" = LEAST("daily_engage_cap", 30),
+     "daily_post_cap" = LEAST("daily_post_cap", 5)`,
   // figures: DB-backed tracked-people table
   `CREATE TABLE IF NOT EXISTS "figures" (
      "id" serial PRIMARY KEY NOT NULL,

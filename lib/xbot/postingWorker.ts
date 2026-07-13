@@ -6,6 +6,7 @@ import { hasXbotWriteEnv } from "./env";
 import { postDraft } from "./engagement";
 import { reportHealth } from "./health";
 import { assessAutoPost } from "./safety";
+import { effectiveCaps, inLockFreeze } from "./limits";
 import { runLikes } from "./likes";
 import { inQuietHours, pacingViolation, underCap } from "./guards";
 import { getXbotSettings } from "./settings";
@@ -35,7 +36,8 @@ export async function runPostingDue(): Promise<PostingResult> {
 
   // Posting waits for active hours; likes self-gate on quiet hours below.
   let postError: string | null = null;
-  if (!inQuietHours(settings)) {
+  if (!inQuietHours(settings) && !inLockFreeze(settings)) {
+    const caps = await effectiveCaps(settings);
     const database = db();
     const drafts = await database.select().from(xbotDrafts)
       .where(eq(xbotDrafts.status, "pending_review"))
@@ -48,8 +50,7 @@ export async function runPostingDue(): Promise<PostingResult> {
       if (!autoOn) continue; // this kind is on review — leave it for the human
 
       const capKind = draft.kind === "engage" ? "engage" : reply ? "reply" : "post";
-      const cap = draft.kind === "engage" ? settings.dailyEngageCap
-        : reply ? settings.dailyReplyCap : settings.dailyPostCap;
+      const cap = draft.kind === "engage" ? caps.engage : reply ? caps.reply : caps.post;
 
       // Cheap gates first: if this kind can't post right now, don't spend a safety call on it.
       if (!(await underCap(capKind, cap))) continue;
