@@ -6,6 +6,7 @@ import { HARVEST_QUERIES_PER_RUN, HARVEST_MAX_PER_RUN, SEARCH_MAX_RESULTS } from
 import { describeXbotError, xbotRw } from "./client";
 import { countActionsSince, countActionsToday, hourlyCap, inQuietHours } from "./guards";
 import { reportHealth } from "./health";
+import { effectiveCaps, inLockFreeze, isAccountLockError, tripAccountLock } from "./limits";
 import { getXbotSettings, parseKeywords, updateXbotSettings } from "./settings";
 
 /** Hard ceiling per run so a single invocation never bursts a pile of likes. The xbot-post cron
@@ -36,13 +37,21 @@ export async function runLikes(): Promise<LikeResult> {
   };
 
   const settings = await getXbotSettings();
+  if (settings.paused) return healthySkip({ liked: 0, skipped: "paused" });
+  if (inLockFreeze(settings)) return healthySkip({ liked: 0, skipped: "post-lock freeze (48h, no writes)" });
   if (!settings.likesAuto) return healthySkip({ liked: 0, skipped: "likesAuto off" });
   if (inQuietHours(settings)) return healthySkip({ liked: 0, skipped: "quiet hours" });
 
-  const remainingDaily = settings.dailyLikeCap - (await countActionsToday("like"));
+  // Humans don't act every 15 minutes like clockwork — randomly sit out ~1 in 4 runs.
+  if (Math.random() < 0.25) return healthySkip({ liked: 0, skipped: "randomized skip (human cadence)" });
+
+  const caps = await effectiveCaps(settings);
+  const remainingDaily = caps.like - (await countActionsToday("like"));
   if (remainingDaily <= 0) return healthySkip({ liked: 0, skipped: "daily like cap reached" });
-  const remainingHour = hourlyCap(settings.dailyLikeCap, settings) - (await countActionsSince("like", new Date(Date.now() - 3600_000)));
-  const budget = Math.max(0, Math.min(LIKES_PER_RUN, remainingDaily, remainingHour));
+  const remainingHour = hourlyCap(caps.like, settings) - (await countActionsSince("like", new Date(Date.now() - 3600_000)));
+  // Variable batch size (1..LIKES_PER_RUN) — identical batch counts every run is a bot signature.
+  const runTarget = 1 + Math.floor(Math.random() * LIKES_PER_RUN);
+  const budget = Math.max(0, Math.min(runTarget, remainingDaily, remainingHour));
   if (budget <= 0) return healthySkip({ liked: 0, skipped: "hourly like cap reached" });
 
   const database = db();
@@ -78,6 +87,8 @@ export async function runLikes(): Promise<LikeResult> {
       // Likely a rate limit or a deleted tweet — stop this run rather than hammer the API.
       likeError = (e as Error).message;
       slog("xbot_like_error", { tweetId: tw.tweetId, error: likeError });
+      // Account locked/suspended → circuit breaker: pause the whole bot immediately.
+      if (isAccountLockError(likeError)) await tripAccountLock(likeError);
       break;
     }
   }
@@ -119,6 +130,7 @@ export async function harvestSearchTweets(): Promise<HarvestResult> {
   };
 
   const settings = await getXbotSettings();
+  if (settings.paused) return healthySkip({ searched: 0, stored: 0, skipped: "paused" });
   if (!settings.likesAuto) return healthySkip({ searched: 0, stored: 0, skipped: "likesAuto off" });
 
   const keywords = parseKeywords(settings);

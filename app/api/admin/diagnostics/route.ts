@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { failingComponents, fetchXUsage, getXbotHealth } from "@/lib/xbot/health";
+import { effectiveCaps, inLockFreeze } from "@/lib/xbot/limits";
+import { getXbotSettings } from "@/lib/xbot/settings";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -123,13 +125,21 @@ export async function GET() {
     const backlog: any = await db().execute(
       sql`SELECT count(*)::int AS n FROM xbot_tweets WHERE liked = false AND found_via IN ('roster','inbound','search')`,
     );
+    const settings = await getXbotSettings();
     report.xbot = {
       health,
       unlikedBacklog: Number((backlog.rows ?? backlog)[0]?.n ?? 0),
       usage: await fetchXUsage(),
+      lock: settings.lockDetectedAt
+        ? { detectedAt: settings.lockDetectedAt, reason: settings.lockReason, inFreeze: inLockFreeze(settings) }
+        : null,
+      effectiveCaps: await effectiveCaps(settings),
     };
     for (const f of failing) {
       problems.push(`xbot ${f.component} failing (${f.consecutiveErrors}×): ${f.lastError}`);
+    }
+    if (settings.lockDetectedAt) {
+      problems.push(`X ACCOUNT LOCK detected ${settings.lockDetectedAt.toISOString()} — bot auto-paused; verify on x.com`);
     }
   } catch (e) {
     report.xbot = { error: (e as Error).message };

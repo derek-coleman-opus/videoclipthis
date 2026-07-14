@@ -6,16 +6,17 @@ import { useRouter } from "next/navigation";
 type Mode = "paused" | "review" | "assisted" | "autopilot" | "growth";
 
 /** One-click autonomy control. Each preset patches xbot_settings via the existing endpoint.
- *  Growth autopilot additionally sets the volume knobs for the 10k-followers push: aggressive
- *  likes (250/day), ramped replies (start 30/day — bump weekly), and a 16h active window
- *  (quiet 05:00-13:00 UTC ≈ US day + evening). Pacing guards spread every cap across the day. */
+ *  Growth autopilot sets the volume knobs to the code-side hard maxima (80 likes/day,
+ *  20 replies/day — the 250/day version of this preset got the account LOCKED) and a 16h
+ *  active window (quiet 05:00-13:00 UTC ≈ US day + evening). On top of these, the server
+ *  ramps caps up over the first three weeks and throttles after any lock. */
 const PRESETS: Record<Exclude<Mode, "paused">, Record<string, unknown>> = {
   review: { paused: false, replyAutonomy: "review", postAutonomy: "review" },
   assisted: { paused: false, replyAutonomy: "auto", postAutonomy: "review", likesAuto: true },
   autopilot: { paused: false, replyAutonomy: "auto", postAutonomy: "auto", likesAuto: true },
   growth: {
     paused: false, replyAutonomy: "auto", postAutonomy: "auto", likesAuto: true,
-    dailyLikeCap: 250, dailyReplyCap: 30, dailyEngageCap: 100, dailyPostCap: 4,
+    dailyLikeCap: 80, dailyReplyCap: 20, dailyEngageCap: 30, dailyPostCap: 4,
     quietStartUtc: 5, quietEndUtc: 13,
   },
 };
@@ -28,7 +29,7 @@ export default function XbotAutonomyPreset({
   const [err, setErr] = useState<string | null>(null);
 
   const current: Mode = paused ? "paused"
-    : replyAutonomy === "auto" && postAutonomy === "auto" && dailyLikeCap >= 200 ? "growth"
+    : replyAutonomy === "auto" && postAutonomy === "auto" && dailyLikeCap >= 80 ? "growth"
     : replyAutonomy === "auto" && postAutonomy === "auto" ? "autopilot"
     : replyAutonomy === "auto" ? "assisted"
     : "review";
@@ -55,7 +56,7 @@ export default function XbotAutonomyPreset({
     { mode: "review", label: "Review", hint: "Draft everything, you approve each one" },
     { mode: "assisted", label: "Assisted+", hint: "Auto-like + auto-reply to others; your posts wait for approval" },
     { mode: "autopilot", label: "Autopilot", hint: "Everything posts unattended (safety-gated)" },
-    { mode: "growth", label: "🚀 Growth autopilot", hint: "Autopilot + volume: 250 likes/day, 30 replies/day (bump weekly), 16h active window" },
+    { mode: "growth", label: "🚀 Growth autopilot", hint: "Autopilot + max safe volume: up to 80 likes/day, 20 replies/day (auto-ramped), 16h active window" },
     { mode: "paused", label: "⏸ Pause", hint: "Stop all engagement now" },
   ];
 

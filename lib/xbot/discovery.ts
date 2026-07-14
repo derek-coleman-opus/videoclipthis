@@ -45,9 +45,10 @@ export async function runDiscovery(): Promise<DiscoveryResult> {
 
 async function runDiscoveryInner(): Promise<DiscoveryResult> {
   const settings = await getXbotSettings();
+  const result: DiscoveryResult = { searched: 0, evaluated: 0, added: 0 };
+  if (settings.paused) return result;
   const database = db();
   const client = await xbotRw();
-  const result: DiscoveryResult = { searched: 0, evaluated: 0, added: 0 };
 
   // Existing roster: dedup against it and respect the cap on active members.
   const existing = await database

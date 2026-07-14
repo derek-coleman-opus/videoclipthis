@@ -6,7 +6,7 @@ import { eq, sql } from "drizzle-orm";
 import { db, xbotHealth, type XbotHealth } from "@/lib/db";
 import { slog } from "@/lib/pipeline/util";
 
-export type XbotComponent = "outbound" | "harvest" | "likes" | "posting" | "inbound" | "discover";
+export type XbotComponent = "outbound" | "harvest" | "likes" | "posting" | "inbound" | "discover" | "account";
 
 /** Human labels + what each component does, for the dashboard banner. */
 export const COMPONENT_LABEL: Record<XbotComponent, string> = {
@@ -16,11 +16,19 @@ export const COMPONENT_LABEL: Record<XbotComponent, string> = {
   posting: "Posting (auto replies/posts)",
   inbound: "Inbound (engage-backs)",
   discover: "Target discovery",
+  account: "X account status",
 };
 
 /** Translate an X API error into plain English + what the operator should do. */
 export function explainXError(message: string): string {
   const m = message.toLowerCase();
+  if (
+    m.includes("temporarily locked") || m.includes("account is locked") ||
+    m.includes("to protect our users from spam") || m.includes("suspended") ||
+    /"code"\s*:\s*(326|64)\b/.test(m)
+  ) {
+    return `X ACCOUNT LOCKED/RESTRICTED — the bot auto-paused itself. Log into x.com, complete the verification challenge, wait ~48h, then unpause; caps stay reduced for two weeks. (${message.slice(0, 200)})`;
+  }
   if (m.includes("usagecapexceeded") || m.includes("usage cap") || m.includes("cap exceeded")) {
     return `X API monthly usage cap exhausted — top up / upgrade the X API plan or wait for the monthly reset. (${message.slice(0, 200)})`;
   }

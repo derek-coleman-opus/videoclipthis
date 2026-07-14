@@ -33,6 +33,8 @@ export type XbotSettingsPatch = Partial<{
   productUrl: string;
   communityId: string;
   setupChecklist: string;
+  lockDetectedAt: Date | null;
+  lockReason: string;
   searchSinceId: string | null;
   mentionsSinceId: string | null;
   xbotUserId: string | null;
