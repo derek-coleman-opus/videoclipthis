@@ -16,6 +16,7 @@
 import { withRetry } from "./util";
 
 export interface OpusClipResult {
+  clipId: string;  // OpusClip's clip id — required for social post-tasks
   startS: number;
   endS: number;
   score: number;   // virality score (0-99)
@@ -132,6 +133,7 @@ function asArray(data: any): any[] {
 function normalizeClip(c: any): OpusClipResult {
   const durationS = c.durationMs != null ? Number(c.durationMs) / 1000 : Number(c.duration_sec ?? c.durationSec ?? 0);
   return {
+    clipId: String(c.id ?? c.clipId ?? c.curationId ?? ""),
     startS: 0,
     endS: durationS,
     score: Number(c.score ?? c.judgeResult?.hookScore ?? 0),
@@ -140,6 +142,62 @@ function normalizeClip(c: any): OpusClipResult {
     costUsd: 0,
     renderPending: Boolean(c.renderAsVideoFile?.pending ?? false),
   };
+}
+
+// ── Social posting (cross-platform distribution) ────────────────────────────
+// GET /social-accounts?q=mine lists the accounts connected in the OpusClip dashboard;
+// POST /post-tasks publishes an already-rendered clip to one of them instantly.
+// Shapes verified against the published API reference (opus-skills api-reference.md).
+
+export interface OpusSocialAccount {
+  postAccountId: string;
+  subAccountId: string | null; // required for Facebook/Instagram/LinkedIn posts
+  platform: string;            // YOUTUBE|TIKTOK_BUSINESS|FACEBOOK_PAGE|INSTAGRAM_BUSINESS|LINKEDIN|TWITTER
+  name: string;                // extUserName
+}
+
+/** Social accounts connected in the OpusClip dashboard (Settings → Social accounts). */
+export async function opusclipListSocialAccounts(
+  apiKey: string,
+  base: string,
+): Promise<OpusSocialAccount[]> {
+  const data = await opusFetch("GET", "/api/social-accounts?q=mine", apiKey, base);
+  const list = Array.isArray(data?.data) ? data.data : asArray(data);
+  return list.map((a: any) => ({
+    postAccountId: String(a.postAccountId ?? ""),
+    subAccountId: a.subAccountId ? String(a.subAccountId) : null,
+    platform: String(a.platform ?? ""),
+    name: String(a.extUserName ?? a.extUserId ?? ""),
+  })).filter((a: OpusSocialAccount) => a.postAccountId && a.platform);
+}
+
+/** Publish a rendered clip to one connected account right now. Returns the task id when the
+ *  API provides one. Rate limit: 1 req/s — callers publishing to several accounts must pace. */
+export async function opusclipCreatePostTask(
+  args: {
+    projectId: string;
+    clipId: string;
+    postAccountId: string;
+    subAccountId?: string | null;
+    title: string;
+    description: string;
+  },
+  apiKey: string,
+  base: string,
+): Promise<string | null> {
+  const body: Record<string, unknown> = {
+    projectId: args.projectId,
+    clipId: args.clipId,
+    postAccountId: args.postAccountId,
+    postDetail: {
+      title: args.title,
+      custom: { description: args.description, privacy: "public" },
+    },
+  };
+  if (args.subAccountId) body.subAccountId = args.subAccountId;
+  const data = await opusFetch("POST", "/api/post-tasks", apiKey, base, body);
+  const task = data?.data ?? data;
+  return task?.taskId ? String(task.taskId) : task?.id ? String(task.id) : null;
 }
 
 /** One status check on a project's exportable clips (may be empty/partial mid-render).

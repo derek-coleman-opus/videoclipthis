@@ -40,6 +40,7 @@ export const clips = pgTable("clips", {
   hookCaption: text("hook_caption").default(""),
   postText: text("post_text").notNull(),
   clipUrl: text("clip_url").default(""),
+  opusClipId: text("opus_clip_id"),                   // OpusClip clip id (needed for social post-tasks)
   xPostId: text("x_post_id"),
   replyTo: text("reply_to"),                          // tweet id for summon replies
   kind: text("kind").notNull().default("scout"),      // scout | summon
@@ -53,6 +54,22 @@ export const clips = pgTable("clips", {
   postedAt: ts("posted_at"),
 }, (t) => ({
   statusIdx: index("clips_status_idx").on(t.status),
+}));
+
+/** Per-platform cross-post ledger: one row per (clip, social account) publish attempt via
+ *  OpusClip post-tasks. Distribution must never depend on a single platform again. */
+export const clipPublishes = pgTable("clip_publishes", {
+  id: serial("id").primaryKey(),
+  clipId: integer("clip_id").references(() => clips.id).notNull(),
+  platform: text("platform").notNull(),               // YOUTUBE|TIKTOK_BUSINESS|INSTAGRAM_BUSINESS|FACEBOOK_PAGE|LINKEDIN|TWITTER
+  postAccountId: text("post_account_id").notNull(),
+  accountName: text("account_name").default(""),
+  status: text("status").notNull().default("posted"), // posted | failed
+  taskId: text("task_id"),                            // OpusClip post-task id, when returned
+  error: text("error").default(""),
+  createdAt: ts("created_at").defaultNow(),
+}, (t) => ({
+  clipIdx: index("clip_publishes_clip_idx").on(t.clipId),
 }));
 
 /** Inbound @videoclipthis mentions (Summon mode). */
@@ -103,6 +120,7 @@ export const settings = pgTable("settings", {
   opusBrandTemplateId: text("opus_brand_template_id"), // OpusClip template: vertical layout + caption style
   searchTopics: text("search_topics").notNull().default(""), // topic/keyword search terms, one per line; "" → code defaults
   searchOffset: integer("search_offset").notNull().default(0), // rotation cursor into the figure+topic search list
+  crosspostAccounts: text("crosspost_accounts").notNull().default("[]"), // JSON [{postAccountId, subAccountId?, platform, name}] to auto-cross-post to
   summonSinceId: text("summon_since_id"),                 // last @mention id processed (Summon poll cursor)
   xBotUserId: text("x_bot_user_id"),                      // cached id of the bot's own X account
   figureSearchAt: ts("figure_search_at"),                 // last figure-search run (quota throttle)
@@ -266,6 +284,7 @@ export const xbotHealth = pgTable("xbot_health", {
 export type Candidate = typeof candidates.$inferSelect;
 export type NewCandidate = typeof candidates.$inferInsert;
 export type Clip = typeof clips.$inferSelect;
+export type ClipPublish = typeof clipPublishes.$inferSelect;
 export type RunRow = typeof runs.$inferSelect;
 export type EventRow = typeof events.$inferSelect;
 export type Settings = typeof settings.$inferSelect;

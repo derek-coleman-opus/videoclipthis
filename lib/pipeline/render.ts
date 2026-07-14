@@ -12,6 +12,7 @@ import { db, candidates, clips, summonRequests, type Candidate, type Clip, type 
 import { getSettings } from "@/lib/settings";
 import { MIN_CLIP_POST_GAP_MIN } from "./config";
 import { opusclipFetchClips, type OpusClipResult } from "./opusclip";
+import { crossPostClip } from "./crosspost";
 import { composePost } from "./production";
 import { xPublisher } from "./publishing";
 import { hasXEnv } from "./env";
@@ -139,6 +140,7 @@ export async function collectRenders(): Promise<CollectResult> {
     const [clip] = await database.insert(clips).values({
       candidateId: row.id, startS: moment.startS, endS: moment.endS,
       hookCaption: moment.hookCaption, postText, clipUrl: moment.clipUrl,
+      opusClipId: clipsReady[0].clipId || null,
       kind: row.source === "summon" ? "summon" : "scout",
       status: autoPost ? "approved" : "pending_review",
       replyTo: summonReq?.tweetId ?? null, costUsd: moment.costUsd,
@@ -243,4 +245,7 @@ export async function markClipPosted(clip: Clip, xPostId: string | null): Promis
     clip.kind === "summon" ? `Summon: replied with a clip` : `Posted: ${clip.postText.slice(0, 80)}`,
     "clips", clip.id,
   );
+  // Multi-platform distribution: push the same render to every enabled connected account.
+  // Never throws — a cross-post failure can't undo the X post that just succeeded.
+  await crossPostClip(clip);
 }

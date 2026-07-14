@@ -1,13 +1,16 @@
-import { desc, eq, ne } from "drizzle-orm";
-import { db, clips, candidates } from "@/lib/db";
+import { desc, eq, inArray, ne } from "drizzle-orm";
+import { db, clips, candidates, clipPublishes, type ClipPublish } from "@/lib/db";
+import { platformLabel } from "@/lib/pipeline/crosspost";
 import ClipActions from "@/components/ClipActions";
 
 export const dynamic = "force-dynamic";
 
 export default async function PostsPage() {
   let rows: Awaited<ReturnType<typeof load>>;
+  let publishes: Map<number, ClipPublish[]>;
   try {
     rows = await load();
+    publishes = await loadPublishes(rows.map((r) => r.id));
   } catch (e) {
     return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
   }
@@ -41,6 +44,18 @@ export default async function PostsPage() {
               )}
               <span className="text-neutral-500">{c.kind}</span>
               {c.resharedBySpeaker && <span className="text-green-400">↻ reshared by speaker</span>}
+              {/* Cross-post fan-out: one badge per platform this clip was pushed to. */}
+              {(publishes.get(c.id) ?? []).map((p) => (
+                <span
+                  key={p.id}
+                  title={p.status === "failed" ? p.error ?? "" : p.accountName ?? ""}
+                  className={`rounded px-2 py-0.5 ${
+                    p.status === "posted" ? "bg-indigo-900/60 text-indigo-300" : "bg-red-900/60 text-red-300"
+                  }`}
+                >
+                  {platformLabel(p.platform)}{p.status === "failed" ? " ✗" : ""}
+                </span>
+              ))}
               {typeof c.views === "number" && c.views > 0 && (
                 <span className="text-neutral-400">{c.views.toLocaleString()} views</span>
               )}
@@ -128,4 +143,20 @@ async function load() {
     .where(ne(clips.status, "expired")) // stale review clips disappear from the queue
     .orderBy(desc(clips.createdAt))
     .limit(100);
+}
+
+/** Cross-post results for the listed clips, grouped by clip id. */
+async function loadPublishes(clipIds: number[]): Promise<Map<number, ClipPublish[]>> {
+  const map = new Map<number, ClipPublish[]>();
+  if (!clipIds.length) return map;
+  const rows = await db()
+    .select().from(clipPublishes)
+    .where(inArray(clipPublishes.clipId, clipIds))
+    .orderBy(clipPublishes.createdAt);
+  for (const row of rows) {
+    const list = map.get(row.clipId) ?? [];
+    list.push(row);
+    map.set(row.clipId, list);
+  }
+  return map;
 }

@@ -14,6 +14,7 @@ export async function updateSettings(
   patch: Partial<{
     paused: boolean; threshold: number; autonomy: string; dailyClipCap: number;
     niche: string; watchChannels: string; opusBrandTemplateId: string | null; searchTopics: string;
+    crosspostAccounts: string;
   }>,
 ): Promise<Settings> {
   const database = db();
