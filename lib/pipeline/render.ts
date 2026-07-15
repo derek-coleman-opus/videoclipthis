@@ -13,6 +13,7 @@ import { getSettings } from "@/lib/settings";
 import { MIN_CLIP_POST_GAP_MIN } from "./config";
 import { opusclipFetchClips, type OpusClipResult } from "./opusclip";
 import { crossPostClip } from "./crosspost";
+import { screenClipForAutoPost } from "./clipSafety";
 import { composePost } from "./production";
 import { xPublisher } from "./publishing";
 import { hasXEnv } from "./env";
@@ -133,7 +134,18 @@ export async function collectRenders(): Promise<CollectResult> {
     const summonReq = row.source === "summon"
       ? (await database.select().from(summonRequests).where(eq(summonRequests.candidateId, row.id)).limit(1))[0]
       : undefined;
-    const autoPost = row.source === "summon" || cfg.autonomy === "auto";
+    let autoPost = row.source === "summon" || cfg.autonomy === "auto";
+
+    // Unattended posts get a final content screen (adult/violent/hate/harassment → held for a
+    // human). Manual review-mode clips skip it — the human approval IS the screen.
+    let holdReason = "";
+    if (autoPost) {
+      const screen = await screenClipForAutoPost(row.title, moment.hookCaption, postText);
+      if (!screen.allow) {
+        autoPost = false;
+        holdReason = screen.reason;
+      }
+    }
 
     // Insert the clip row BEFORE any publish attempt — the paid render is never lost to a
     // publish failure, and there is no orphan-tweet window.
@@ -148,8 +160,10 @@ export async function collectRenders(): Promise<CollectResult> {
     await database.update(candidates).set({ status: "selected" }).where(eq(candidates.id, row.id));
 
     await logEvent(
-      autoPost ? "scored" : "scored",
-      autoPost ? `Clip ready — queued to post: ${row.title}` : `Clip ready for review: ${row.title}`,
+      holdReason ? "error" : "scored",
+      holdReason
+        ? `Clip HELD by safety screen (needs your review): ${row.title} — ${holdReason}`
+        : autoPost ? `Clip ready — queued to post: ${row.title}` : `Clip ready for review: ${row.title}`,
       "clips", clip.id,
     );
     collected++;

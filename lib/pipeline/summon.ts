@@ -4,6 +4,7 @@ import { requireScoutEnv, requireXEnv, requireXReadEnv } from "./env";
 import { getSettings, updateSummonState } from "@/lib/settings";
 import { MAX_CONCURRENT_RENDERS } from "./config";
 import { opusclipCreateProject } from "./opusclip";
+import { screenSummonTarget } from "./clipSafety";
 import { collectRenders } from "./render";
 import { logEvent } from "./events";
 import { fetchMentions, getBotUserId } from "./xread";
@@ -68,6 +69,19 @@ export async function runSummon(): Promise<SummonResult> {
       .limit(1);
     if (seen.length) continue;
 
+    // Safety gate BEFORE spending a render: summon is an open door (any X user, any URL),
+    // so only allowlisted video hosts pass, and the request+video title are screened for
+    // adult/unsafe content. Rejected requests are recorded and never rendered or replied to.
+    const screen = await screenSummonTarget(m.targetUrl, m.text);
+    if (!screen.allow) {
+      await database.insert(summonRequests).values({
+        tweetId: m.tweetId, requester: m.requester, targetUrl: m.targetUrl,
+        status: "rejected",
+      });
+      await logEvent("skipped", `Summon rejected (@${m.requester}): ${screen.reason}`);
+      continue;
+    }
+
     const [cand] = await database.insert(candidates).values({
       source: "summon", url: m.targetUrl, videoId: m.targetUrl,
       title: `Summoned by @${m.requester}`, speaker: m.requester, status: "found",
@@ -77,7 +91,7 @@ export async function runSummon(): Promise<SummonResult> {
       status: "received", candidateId: cand.id,
     }).returning();
 
-    // A human asked, so we skip the relevance gate: straight to render submission.
+    // The safety gate passed; skip only the RELEVANCE gate (a human asked): submit the render.
     try {
       const projectId = await opusclipCreateProject(m.targetUrl, opusKey, opusBase, {}, cfg.opusBrandTemplateId);
       await database.update(candidates)
