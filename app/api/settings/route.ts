@@ -8,6 +8,7 @@ export async function POST(req: NextRequest) {
   const patch: {
     paused?: boolean; threshold?: number; autonomy?: string; dailyClipCap?: number;
     niche?: string; watchChannels?: string; opusBrandTemplateId?: string | null; searchTopics?: string;
+    crosspostAccounts?: string;
   } = {};
   if (typeof body.paused === "boolean") patch.paused = body.paused;
   if (typeof body.threshold === "number") patch.threshold = body.threshold;
@@ -23,6 +24,28 @@ export async function POST(req: NextRequest) {
     patch.opusBrandTemplateId = body.opusBrandTemplateId.trim() || null;
   }
   if (typeof body.searchTopics === "string") patch.searchTopics = body.searchTopics;
+  if (typeof body.crosspostAccounts === "string") {
+    try {
+      const arr = JSON.parse(body.crosspostAccounts);
+      if (!Array.isArray(arr)) throw new Error("not an array");
+      // Keep only well-formed account entries — this JSON drives real posts.
+      patch.crosspostAccounts = JSON.stringify(
+        arr
+          .map((a: any) => ({
+            postAccountId: String(a?.postAccountId ?? ""),
+            subAccountId: a?.subAccountId ? String(a.subAccountId) : null,
+            platform: String(a?.platform ?? ""),
+            name: String(a?.name ?? ""),
+          }))
+          .filter((a) => a.postAccountId && a.platform),
+      );
+    } catch {
+      return NextResponse.json(
+        { ok: false, error: "crosspostAccounts must be a JSON array of accounts" },
+        { status: 400 },
+      );
+    }
+  }
   try {
     const updated = await updateSettings(patch);
     return NextResponse.json({ ok: true, settings: updated });

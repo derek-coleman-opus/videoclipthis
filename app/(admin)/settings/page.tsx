@@ -1,5 +1,6 @@
 import { getSettings } from "@/lib/settings";
 import SettingsForm from "@/components/SettingsForm";
+import CrosspostAccounts from "@/components/CrosspostAccounts";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,7 @@ export default async function SettingsPage() {
           searchTopics: cfg.searchTopics ?? "",
         }}
       />
+      <CrosspostAccounts />
       <p className="mt-6 max-w-md text-xs leading-relaxed text-neutral-500">
         <b>Autonomy</b> — <b>review</b> queues every clip for your approval (default, safest while tuning the
         ranking). <b>auto</b> posts finished clips on its own, capped at the daily clip cap and spaced

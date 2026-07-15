@@ -49,6 +49,21 @@ const STATEMENTS: string[] = [
      "daily_reply_cap" = LEAST("daily_reply_cap", 20),
      "daily_engage_cap" = LEAST("daily_engage_cap", 30),
      "daily_post_cap" = LEAST("daily_post_cap", 5)`,
+  // clips: multi-platform cross-posting via OpusClip post-tasks (0015)
+  `ALTER TABLE "clips" ADD COLUMN IF NOT EXISTS "opus_clip_id" text`,
+  `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "crosspost_accounts" text NOT NULL DEFAULT '[]'`,
+  `CREATE TABLE IF NOT EXISTS "clip_publishes" (
+     "id" serial PRIMARY KEY NOT NULL,
+     "clip_id" integer NOT NULL,
+     "platform" text NOT NULL,
+     "post_account_id" text NOT NULL,
+     "account_name" text DEFAULT '',
+     "status" text NOT NULL DEFAULT 'posted',
+     "task_id" text,
+     "error" text DEFAULT '',
+     "created_at" timestamp with time zone DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS "clip_publishes_clip_idx" ON "clip_publishes" ("clip_id")`,
   // figures: DB-backed tracked-people table
   `CREATE TABLE IF NOT EXISTS "figures" (
      "id" serial PRIMARY KEY NOT NULL,

@@ -81,6 +81,7 @@ export async function getBotUserId(): Promise<string> {
 export interface MentionRaw {
   tweetId: string;
   requester: string;
+  text: string;         // the mention's own text — safety screening input
   targetUrl: string | null;
 }
 
@@ -118,6 +119,7 @@ export async function fetchMentions(
     return {
       tweetId: t.id,
       requester: includes?.author?.(t)?.username ?? "",
+      text: String(t.text ?? ""),
       targetUrl: urls[0] ?? null,
     };
   });
