@@ -22,14 +22,55 @@ export interface SafetyVerdict {
   reason: string;
 }
 
-/** Hard gate: is this URL on a host summon is willing to clip from? */
+/** Hard gate: is this URL on a host summon is willing to clip from? (X status URLs take a
+ *  separate, deeper gate — see xStatusIdFromUrl + the summon flow.) */
 export function allowedSummonUrl(url: string): SafetyVerdict {
   try {
     const host = new URL(url).hostname.toLowerCase();
     if (ALLOWED_SUMMON_HOSTS.includes(host)) return { allow: true, reason: "" };
-    return { allow: false, reason: `unsupported video host "${host}" — summon only clips YouTube/Vimeo` };
+    return { allow: false, reason: `unsupported video host "${host}" — summon clips X videos and YouTube/Vimeo links` };
   } catch {
     return { allow: false, reason: "not a valid URL" };
+  }
+}
+
+/** Extract the status id from an x.com/twitter.com tweet URL (including the /video/1 form
+ *  X uses for attached-video links). Null when the URL isn't a tweet link. */
+export function xStatusIdFromUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase().replace(/^www\./, "");
+    if (host !== "x.com" && host !== "twitter.com") return null;
+    const m = u.pathname.match(/\/status(?:es)?\/(\d+)/);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Screen an X-NATIVE video target: no platform moderation and no title metadata underneath,
+ *  so judge the post's text + author + the request. Callers must ALSO enforce the tweet's
+ *  possibly_sensitive flag (hard reject) before this. Fail-safe: errors → not allowed. */
+export async function screenXVideoTarget(
+  requesterText: string,
+  tweetText: string,
+  authorHandle: string,
+): Promise<SafetyVerdict> {
+  if (NSFW_RE.test(`${requesterText} ${tweetText} ${authorHandle}`)) {
+    return { allow: false, reason: "post/request matches adult-content filter" };
+  }
+  try {
+    return await claudeVerdict(
+      TARGET_SCREEN_PROMPT,
+      [
+        `The video is attached to this X post by @${authorHandle}:`,
+        tweetText || "(no text)",
+        requesterText ? `The user's tweet asking for the clip: ${requesterText}` : "",
+      ].filter(Boolean).join("\n"),
+    );
+  } catch (e) {
+    slog("clip_safety_error", { authorHandle, error: (e as Error).message });
+    return { allow: false, reason: "safety check unavailable — request held" };
   }
 }
 

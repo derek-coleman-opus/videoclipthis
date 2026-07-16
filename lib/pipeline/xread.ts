@@ -81,8 +81,10 @@ export async function getBotUserId(): Promise<string> {
 export interface MentionRaw {
   tweetId: string;
   requester: string;
-  text: string;         // the mention's own text — safety screening input
-  targetUrl: string | null;
+  text: string;               // the mention's own text — safety screening input
+  targetUrl: string | null;   // first URL in the mention or its parent (YouTube/Vimeo/X links)
+  mentionHasMedia: boolean;   // the mention itself carries attachments (user posted the video)
+  parentTweetId: string | null; // the tweet replied to / quoted — where the video usually lives
 }
 
 /** Pull the first http(s) URL out of a tweet's entities (expanded form preferred). */
@@ -104,7 +106,7 @@ export async function fetchMentions(
   const params: any = {
     max_results: 50,
     expansions: ["referenced_tweets.id", "author_id", "referenced_tweets.id.author_id"],
-    "tweet.fields": ["entities", "referenced_tweets", "author_id"],
+    "tweet.fields": ["entities", "referenced_tweets", "author_id", "attachments"],
     "user.fields": ["username"],
   };
   if (sinceId) params.since_id = sinceId;
@@ -116,15 +118,58 @@ export async function fetchMentions(
   const mentions: MentionRaw[] = tweets.map((t) => {
     const referenced = includes?.repliedTo?.(t) ?? includes?.quote?.(t);
     const urls = urlsFromTweet(t).length ? urlsFromTweet(t) : urlsFromTweet(referenced);
+    const parentId = t.referenced_tweets?.find((r: any) => r.type === "replied_to")?.id
+      ?? t.referenced_tweets?.find((r: any) => r.type === "quoted")?.id ?? null;
     return {
       tweetId: t.id,
       requester: includes?.author?.(t)?.username ?? "",
       text: String(t.text ?? ""),
       targetUrl: urls[0] ?? null,
+      mentionHasMedia: Boolean(t.attachments?.media_keys?.length),
+      parentTweetId: parentId ? String(parentId) : null,
     };
   });
 
   return { mentions, newestId: res.meta?.newest_id ?? null };
+}
+
+export interface TweetVideo {
+  tweetId: string;
+  authorUsername: string;
+  text: string;
+  durationS: number | null;      // from the video media's duration_ms; null if X omits it
+  possiblySensitive: boolean;    // X's own adult/sensitive flag — a hard gate for summon
+  url: string;                   // canonical status URL to hand OpusClip as the source
+}
+
+/** Look up one tweet and its native video. Returns null when the tweet has no video media.
+ *  This is the X-native summon path: everything the safety gate needs in one read. */
+export async function fetchTweetVideo(tweetId: string): Promise<TweetVideo | null> {
+  const client = await v2();
+  const res: any = await withRetry(
+    () => client.singleTweet(tweetId, {
+      expansions: ["attachments.media_keys", "author_id"],
+      "tweet.fields": ["possibly_sensitive", "text", "author_id", "attachments"],
+      "media.fields": ["duration_ms", "type"],
+      "user.fields": ["username"],
+    }),
+    { label: "x tweet video" },
+  );
+  const t = res?.data;
+  if (!t) return null;
+  const media: any[] = res?.includes?.media ?? [];
+  const video = media.find((m: any) => m.type === "video");
+  if (!video) return null;
+  const author = (res?.includes?.users ?? []).find((u: any) => u.id === t.author_id);
+  const username = author?.username ?? "i";
+  return {
+    tweetId: String(t.id),
+    authorUsername: username,
+    text: String(t.text ?? ""),
+    durationS: video.duration_ms != null ? Math.round(Number(video.duration_ms) / 1000) : null,
+    possiblySensitive: Boolean(t.possibly_sensitive),
+    url: `https://x.com/${username}/status/${t.id}`,
+  };
 }
 
 export { v2 as xReadV2 };
