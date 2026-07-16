@@ -8,6 +8,7 @@ import {
   allowedSummonUrl, fetchVideoDurationS, MIN_SUMMON_VIDEO_S, screenSummonTarget,
 } from "./clipSafety";
 import { xPublisher } from "./publishing";
+import { reportHealth } from "@/lib/xbot/health";
 import { collectRenders } from "./render";
 import { logEvent } from "./events";
 import { fetchMentions, getBotUserId } from "./xread";
@@ -36,13 +37,26 @@ export async function runSummon(): Promise<SummonResult> {
   const collect = await collectRenders();
 
   // Resolve + cache the bot's own user id, then poll mentions since the last processed one.
+  // The poll reports to the health ledger: a failing mentions endpoint (rate limit, wrong API
+  // tier, bad bearer) must show up on /replies and diagnostics — not vanish into a cron 500.
   const cfg = await getSettings();
-  let botUserId = cfg.xBotUserId;
-  if (!botUserId) {
-    botUserId = await getBotUserId();
-    await updateSummonState({ xBotUserId: botUserId });
+  let mentions: Awaited<ReturnType<typeof fetchMentions>>["mentions"];
+  try {
+    let botUserId = cfg.xBotUserId;
+    if (!botUserId) {
+      botUserId = await getBotUserId();
+      await updateSummonState({ xBotUserId: botUserId });
+    }
+    ({ mentions } = await fetchMentions(botUserId, cfg.summonSinceId));
+    await reportHealth("summon", true);
+  } catch (e) {
+    await reportHealth("summon", false, (e as Error).message);
+    await logEvent("error", `Summon mention poll failed: ${(e as Error).message}`);
+    throw e;
   }
-  const { mentions } = await fetchMentions(botUserId, cfg.summonSinceId);
+  if (mentions.length) {
+    await logEvent("run", `Summon poll: ${mentions.length} new mention(s) of the bot`);
+  }
 
   // Summon shares OpusClip's concurrent-render budget with Scout. Only take as many mentions
   // as there are free slots; the cursor stops before unhandled ones, so they're retried next
@@ -102,6 +116,18 @@ export async function runSummon(): Promise<SummonResult> {
         tweetId: m.tweetId, requester: m.requester, targetUrl: m.targetUrl, status: "rejected",
       });
       await logEvent("skipped", `Summon rejected (@${m.requester}): ${hostCheck.reason}`);
+      // Honest-user case (X-native videos are the #1 thing people tag) — explain the rule
+      // publicly, unlike safety rejections which stay silent.
+      try {
+        await xPublisher().publish({
+          clipUrl: "",
+          postText: `Right now I can only clip videos hosted on YouTube or Vimeo (5+ min) — X-native videos aren't supported yet. Tag me under a post with a YouTube link and I'll pull out the best moment 🎬`,
+          costUsd: 0, durationS: 0,
+        }, m.tweetId);
+      } catch (e) {
+        await logEvent("error", `Summon unsupported-host reply failed for @${m.requester}: ${(e as Error).message}`);
+      }
+      processed++; // the reply counts against the per-run reply budget
       continue;
     }
 

@@ -6,7 +6,9 @@ import { eq, sql } from "drizzle-orm";
 import { db, xbotHealth, type XbotHealth } from "@/lib/db";
 import { slog } from "@/lib/pipeline/util";
 
-export type XbotComponent = "outbound" | "harvest" | "likes" | "posting" | "inbound" | "discover" | "account";
+export type XbotComponent =
+  | "outbound" | "harvest" | "likes" | "posting" | "inbound" | "discover" | "account"
+  | "summon"; // clip pipeline's mention poll reports here too — same ledger, same "never silent" rule
 
 /** Human labels + what each component does, for the dashboard banner. */
 export const COMPONENT_LABEL: Record<XbotComponent, string> = {
@@ -17,6 +19,7 @@ export const COMPONENT_LABEL: Record<XbotComponent, string> = {
   inbound: "Inbound (engage-backs)",
   discover: "Target discovery",
   account: "X account status",
+  summon: "Summon (@videoclipthis mention poll)",
 };
 
 /** Translate an X API error into plain English + what the operator should do. */
