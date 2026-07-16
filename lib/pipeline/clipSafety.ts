@@ -70,6 +70,64 @@ async function claudeVerdict(system: string, user: string): Promise<SafetyVerdic
     : { allow: false, reason: String(obj?.reason ?? "flagged by safety check") };
 }
 
+/** Summon minimum source length: shorter videos don't contain a clippable "moment" and waste
+ *  a render — the bot replies telling the user instead. */
+export const MIN_SUMMON_VIDEO_S = Number(process.env.MIN_SUMMON_VIDEO_S ?? 300);
+
+/** Extract a YouTube video id from watch/youtu.be/live/shorts/embed URL forms. */
+export function youtubeVideoId(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    if (host === "youtu.be") return u.pathname.slice(1).split("/")[0] || null;
+    if (!host.includes("youtube.com")) return null;
+    const v = u.searchParams.get("v");
+    if (v) return v;
+    const m = u.pathname.match(/^\/(live|shorts|embed)\/([\w-]{6,})/);
+    return m ? m[2] : null;
+  } catch {
+    return null;
+  }
+}
+
+function iso8601ToSeconds(d: string): number | null {
+  const m = d.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
+  if (!m || (!m[1] && !m[2] && !m[3])) return null;
+  return Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0);
+}
+
+/** Source video length in seconds — YouTube Data API (1 quota unit) or Vimeo oEmbed.
+ *  Best-effort: null when it can't be determined (callers should fail OPEN on null; a
+ *  transient lookup failure must not bounce a legitimate request). */
+export async function fetchVideoDurationS(url: string): Promise<number | null> {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host.includes("vimeo")) {
+      const res = await fetch(
+        `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(url)}`,
+        { signal: AbortSignal.timeout(5000) },
+      );
+      if (!res.ok) return null;
+      const j: any = await res.json();
+      return j?.duration != null ? Number(j.duration) : null;
+    }
+    const id = youtubeVideoId(url);
+    const key = process.env.YOUTUBE_API_KEY ?? "";
+    if (!id || !key) return null;
+    const res = await fetch(
+      `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${encodeURIComponent(id)}&key=${key}`,
+      { signal: AbortSignal.timeout(5000) },
+    );
+    if (!res.ok) return null;
+    const j: any = await res.json();
+    const iso = j?.items?.[0]?.contentDetails?.duration;
+    return iso ? iso8601ToSeconds(String(iso)) : null;
+  } catch (e) {
+    slog("video_duration_error", { url, error: (e as Error).message });
+    return null;
+  }
+}
+
 const TARGET_SCREEN_PROMPT = `You are a content-safety gate for an automated video-clipping bot on X.
 A user has asked the bot to clip a video. Decide if the request is safe to fulfil.
 It is NOT safe if the video or the request suggests: adult/sexual content of any kind, graphic
