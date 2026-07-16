@@ -4,7 +4,10 @@ import { requireScoutEnv, requireXEnv, requireXReadEnv } from "./env";
 import { getSettings, updateSummonState } from "@/lib/settings";
 import { MAX_CONCURRENT_RENDERS } from "./config";
 import { opusclipCreateProject } from "./opusclip";
-import { screenSummonTarget } from "./clipSafety";
+import {
+  allowedSummonUrl, fetchVideoDurationS, MIN_SUMMON_VIDEO_S, screenSummonTarget,
+} from "./clipSafety";
+import { xPublisher } from "./publishing";
 import { collectRenders } from "./render";
 import { logEvent } from "./events";
 import { fetchMentions, getBotUserId } from "./xread";
@@ -69,14 +72,43 @@ export async function runSummon(): Promise<SummonResult> {
       .limit(1);
     if (seen.length) continue;
 
-    // Safety gate BEFORE spending a render: summon is an open door (any X user, any URL),
-    // so only allowlisted video hosts pass, and the request+video title are screened for
-    // adult/unsafe content. Rejected requests are recorded and never rendered or replied to.
+    // Gates BEFORE spending a render, cheapest first. Summon is an open door (any X user,
+    // any URL): (1) allowlisted video hosts only; (2) source must be long enough to contain
+    // a clippable moment — too short gets a friendly reply saying so; (3) the request+video
+    // title are screened for adult/unsafe content (rejected silently — don't teach abusers
+    // the filter).
+    const hostCheck = allowedSummonUrl(m.targetUrl);
+    if (!hostCheck.allow) {
+      await database.insert(summonRequests).values({
+        tweetId: m.tweetId, requester: m.requester, targetUrl: m.targetUrl, status: "rejected",
+      });
+      await logEvent("skipped", `Summon rejected (@${m.requester}): ${hostCheck.reason}`);
+      continue;
+    }
+
+    const durationS = await fetchVideoDurationS(m.targetUrl);
+    if (durationS != null && durationS < MIN_SUMMON_VIDEO_S) {
+      await database.insert(summonRequests).values({
+        tweetId: m.tweetId, requester: m.requester, targetUrl: m.targetUrl, status: "rejected",
+      });
+      try {
+        await xPublisher().publish({
+          clipUrl: "",
+          postText: `Sorry — I can only clip videos that are at least ${Math.round(MIN_SUMMON_VIDEO_S / 60)} minutes long, and this one is ${Math.floor(durationS / 60)}m${String(durationS % 60).padStart(2, "0")}s. Tag me under a full talk, podcast, or keynote and I'll pull out the best moment 🎬`,
+          costUsd: 0, durationS: 0,
+        }, m.tweetId);
+        await logEvent("skipped", `Summon rejected (@${m.requester}): video too short (${durationS}s) — told them the ${MIN_SUMMON_VIDEO_S / 60}-min minimum`);
+      } catch (e) {
+        await logEvent("error", `Summon too-short reply failed for @${m.requester}: ${(e as Error).message}`);
+      }
+      processed++; // the reply counts against the per-run reply budget
+      continue;
+    }
+
     const screen = await screenSummonTarget(m.targetUrl, m.text);
     if (!screen.allow) {
       await database.insert(summonRequests).values({
-        tweetId: m.tweetId, requester: m.requester, targetUrl: m.targetUrl,
-        status: "rejected",
+        tweetId: m.tweetId, requester: m.requester, targetUrl: m.targetUrl, status: "rejected",
       });
       await logEvent("skipped", `Summon rejected (@${m.requester}): ${screen.reason}`);
       continue;
