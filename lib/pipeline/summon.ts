@@ -5,8 +5,8 @@ import { getSettings, updateSummonState } from "@/lib/settings";
 import { MAX_CONCURRENT_RENDERS } from "./config";
 import { opusclipCreateProject } from "./opusclip";
 import {
-  allowedSummonUrl, fetchVideoDurationS, MIN_SUMMON_VIDEO_S, screenSummonTarget,
-  screenXVideoTarget, xStatusIdFromUrl,
+  allowedSummonUrl, fetchOEmbedMeta, fetchVideoDurationS, MIN_SUMMON_VIDEO_S,
+  screenSummonTarget, screenXVideoTarget, xStatusIdFromUrl,
 } from "./clipSafety";
 import { xPublisher } from "./publishing";
 import { reportHealth } from "@/lib/xbot/health";
@@ -109,8 +109,9 @@ export async function runSummon(): Promise<SummonResult> {
     }
 
     const [cand] = await database.insert(candidates).values({
-      source: "summon", url: gate.url, videoId: gate.url,
-      title: gate.title, speaker: m.requester, status: "found",
+      source: "summon", url: gate.url, videoId: gate.url, title: gate.title,
+      speaker: gate.speaker, speakerHandle: gate.speakerHandle ?? "",
+      status: "found",
     }).returning();
     const [req] = await database.insert(summonRequests).values({
       tweetId: m.tweetId, requester: m.requester, targetUrl: gate.url,
@@ -155,7 +156,7 @@ export async function runSummon(): Promise<SummonResult> {
  *  cases), or reject silently (safety). Supports three target shapes: a YouTube/Vimeo link,
  *  an x.com status link, or a native X video on the tag itself / the post it replies to. */
 type SummonGate =
-  | { action: "render"; url: string; title: string }
+  | { action: "render"; url: string; title: string; speaker: string; speakerHandle: string | null }
   | { action: "reply"; status: "no_video" | "rejected"; text: string; log: string }
   | { action: "reject"; log: string };
 
@@ -192,7 +193,14 @@ async function gateMention(m: MentionRaw): Promise<SummonGate> {
     if (durationS != null && durationS < MIN_SUMMON_VIDEO_S) return tooShort(durationS);
     const screen = await screenSummonTarget(m.targetUrl, m.text);
     if (!screen.allow) return { action: "reject", log: screen.reason };
-    return { action: "render", url: m.targetUrl, title: `Summoned by @${m.requester}` };
+    // Credit the channel by name (oEmbed author); never the requester. No handle — tags
+    // only ever go to actual people/authors we can verify.
+    const meta = await fetchOEmbedMeta(m.targetUrl);
+    return {
+      action: "render", url: m.targetUrl,
+      title: meta?.title || `Summoned by @${m.requester}`,
+      speaker: meta?.author ?? "", speakerHandle: null,
+    };
   }
 
   if (!xId) return noVideo;
@@ -214,5 +222,6 @@ async function gateMention(m: MentionRaw): Promise<SummonGate> {
   return {
     action: "render", url: vid.url,
     title: `X video by @${vid.authorUsername} (summoned by @${m.requester})`,
+    speaker: vid.authorUsername, speakerHandle: vid.authorUsername,
   };
 }

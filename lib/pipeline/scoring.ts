@@ -4,6 +4,9 @@ import type { DetectedCandidate } from "./types";
 export interface Scored {
   score: number;     // 0-100 clip-worthiness
   rationale: string;
+  /** The primary HUMAN speaker's full name — a person, never a company/channel/brand.
+   *  Null when no person can be identified. Powers "tag the speaker, not the brand". */
+  speakerName: string | null;
 }
 
 export interface Scorer {
@@ -25,7 +28,10 @@ clip-worthiness for an audience interested in ${audience}, weighting:
 - saturation (5, inverse): penalize already-widely-clipped.
 Hard rule: the account posts English clips only — if the video's spoken language or
 transcript is not English, return score 0 regardless of the rubric.
-Return JSON: {"score": <int>, "rationale": "<short>"}.`;
+Also identify the primary HUMAN speaker: a person's full name, never a company, channel,
+or brand (conference titles often end "— Name, Company"; the transcript's self-introduction
+also helps). If several speakers, pick the main one. If no person is identifiable, use null.
+Return JSON: {"score": <int>, "rationale": "<short>", "speaker": "<full name>" | null}.`;
 }
 
 function parseScore(text: string): Scored {
@@ -33,12 +39,14 @@ function parseScore(text: string): Scored {
     const match = text.match(/\{[\s\S]*\}/);
     const obj = JSON.parse(match ? match[0] : text);
     const score = Math.round(Number(obj.score));
+    const speaker = typeof obj.speaker === "string" ? obj.speaker.trim() : "";
     return {
       score: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0,
       rationale: String(obj.rationale ?? ""),
+      speakerName: speaker && speaker.toLowerCase() !== "null" ? speaker : null,
     };
   } catch {
-    return { score: 0, rationale: `unparseable: ${text.slice(0, 120)}` };
+    return { score: 0, rationale: `unparseable: ${text.slice(0, 120)}`, speakerName: null };
   }
 }
 

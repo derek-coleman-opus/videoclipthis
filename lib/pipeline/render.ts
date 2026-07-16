@@ -14,7 +14,7 @@ import { MIN_CLIP_POST_GAP_MIN } from "./config";
 import { opusclipFetchClips, type OpusClipResult } from "./opusclip";
 import { crossPostClip } from "./crosspost";
 import { screenClipForAutoPost } from "./clipSafety";
-import { composePost } from "./production";
+import { composePost, composeSummonReply } from "./production";
 import { xPublisher } from "./publishing";
 import { hasXEnv } from "./env";
 import { logEvent } from "./events";
@@ -128,7 +128,9 @@ export async function collectRenders(): Promise<CollectResult> {
 
     const moment = toMoment(clipsReady[0]);
     const d = toDetected(row);
-    const postText = composePost(d, moment);
+    // Summon clips are in-thread comments (credit the video author, no link back);
+    // scout clips are standalone credit-first posts.
+    const postText = row.source === "summon" ? composeSummonReply(d, moment) : composePost(d, moment);
 
     // Summon candidates reply in-thread (always auto); scout clips obey the autonomy gate.
     const summonReq = row.source === "summon"

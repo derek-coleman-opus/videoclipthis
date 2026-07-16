@@ -66,7 +66,10 @@ async function recentUploads(channelId: string, apiKey: string): Promise<Detecte
       url: `https://youtu.be/${v.id}`,
       videoId: v.id,
       title: v.snippet?.title ?? "",
-      speaker: v.snippet?.channelTitle ?? "",
+      // The channel is NOT the speaker — a brand credit ("Loved NVIDIA's talk") never earns a
+      // reshare. The scorer extracts the human speaker from title/transcript; unattributed
+      // clips are held by the credit-first gate.
+      speaker: "",
       channel: v.snippet?.channelTitle ?? "",
       durationS: dur,
       publishedAt: published,
@@ -134,7 +137,7 @@ async function searchTopicVideos(topic: string, apiKey: string, cutoffISO: strin
       url: `https://youtu.be/${v.id}`,
       videoId: v.id,
       title: v.snippet?.title ?? "",
-      speaker: v.snippet?.channelTitle ?? "",
+      speaker: "", // never the channel/brand — the scorer extracts the human speaker
       channel: v.snippet?.channelTitle ?? "",
       durationS: dur,
       publishedAt: v.snippet?.publishedAt ? new Date(v.snippet.publishedAt) : null,

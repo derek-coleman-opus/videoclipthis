@@ -14,6 +14,16 @@ export function composePost(c: DetectedCandidate, m: Moment): string {
   return `${line}\n\n${FOOTER}`;
 }
 
+/** Summon replies post IN-THREAD as a comment under the requester's tag — so no "full talk"
+ *  link (it's the same thread), and the credit goes to the VIDEO'S author, never the person
+ *  who summoned the bot. */
+export function composeSummonReply(c: DetectedCandidate, m: Moment): string {
+  const who = c.speakerHandle ? `@${c.speakerHandle}` : c.speaker || "";
+  const len = Math.round(m.endS - m.startS);
+  const credit = who ? ` of ${who}'s video` : "";
+  return `🎬 Here's the best ${len}s${credit} — ${m.hookCaption}\n\n${FOOTER}`;
+}
+
 /** Credit-first rule: hold a clip we can't confidently attribute. */
 export function needsCreditResolution(c: DetectedCandidate): boolean {
   return !(c.speakerHandle || c.speaker);
