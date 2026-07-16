@@ -178,7 +178,7 @@ interviews, tutorials, and entertainment are safe. When unsure, answer not safe.
 Return JSON: {"safe": true|false, "reason": "<short>"}.`;
 
 /** Fetch the video's public title/author via YouTube oEmbed (no API quota). Best-effort. */
-async function fetchOEmbedTitle(url: string): Promise<{ title: string; author: string } | null> {
+export async function fetchOEmbedMeta(url: string): Promise<{ title: string; author: string } | null> {
   try {
     const res = await fetch(
       `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
@@ -201,7 +201,7 @@ export async function screenSummonTarget(
   const hostCheck = allowedSummonUrl(url);
   if (!hostCheck.allow) return hostCheck;
 
-  const meta = url.includes("vimeo") ? null : await fetchOEmbedTitle(url);
+  const meta = url.includes("vimeo") ? null : await fetchOEmbedMeta(url);
   const combined = `${requesterText} ${meta?.title ?? ""} ${meta?.author ?? ""}`;
   if (NSFW_RE.test(combined)) {
     return { allow: false, reason: "request/title matches adult-content filter" };

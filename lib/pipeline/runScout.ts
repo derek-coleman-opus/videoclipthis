@@ -183,6 +183,19 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
 
       try {
       const scored = await scorer.score(d);
+      // "Tag the speaker, not the brand": the scorer extracts the human speaker from the
+      // title/transcript. A person's name can also match a tracked figure → their verified @.
+      if (!d.speaker && scored.speakerName && scored.speakerName.toLowerCase() !== (d.channel ?? "").toLowerCase()) {
+        d.speaker = scored.speakerName;
+        const fig2 = matchFigure(figures, d);
+        if (fig2) {
+          d.figureName = fig2.name;
+          if (!d.speakerHandle) d.speakerHandle = fig2.xHandle;
+        }
+        await database.update(candidates)
+          .set({ speaker: d.speaker, speakerHandle: d.speakerHandle ?? "", figureName: d.figureName ?? null })
+          .where(eq(candidates.id, cand.id));
+      }
       // Feed performance back into ranking: proven speakers (prior reshares) get a score boost.
       const boost = await reshareBoost(d.speakerHandle);
       const score = Math.min(100, scored.score + boost);
