@@ -5,8 +5,9 @@ export interface DetectedCandidate {
   videoId: string;
   title: string;
   speaker?: string;
-  speakerHandle?: string;   // resolved X handle (no @); empty => held (credit-first rule)
+  speakerHandle?: string;   // resolved X handle (no @) of the human speaker
   channel?: string;
+  channelXHandle?: string;  // the channel/brand's X handle (no @) — operator-verified, never guessed
   event?: string;
   durationS?: number;
   publishedAt?: Date | null;

@@ -64,6 +64,8 @@ const STATEMENTS: string[] = [
      "created_at" timestamp with time zone DEFAULT now()
    )`,
   `CREATE INDEX IF NOT EXISTS "clip_publishes_clip_idx" ON "clip_publishes" ("clip_id")`,
+  // candidates: brand/channel X handle for "tag the speaker AND the brand" (0016)
+  `ALTER TABLE "candidates" ADD COLUMN IF NOT EXISTS "channel_x_handle" text DEFAULT ''`,
   // figures: DB-backed tracked-people table
   `CREATE TABLE IF NOT EXISTS "figures" (
      "id" serial PRIMARY KEY NOT NULL,

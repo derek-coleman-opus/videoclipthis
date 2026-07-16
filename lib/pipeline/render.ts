@@ -58,6 +58,7 @@ function toDetected(row: Candidate): DetectedCandidate {
     speaker: row.speaker ?? "",
     speakerHandle: row.speakerHandle ?? "",
     channel: row.channel ?? "",
+    channelXHandle: row.channelXHandle ?? "",
     event: row.event ?? "",
     durationS: row.durationS ?? 0,
     figureName: row.figureName ?? undefined,
