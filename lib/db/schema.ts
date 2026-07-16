@@ -78,7 +78,7 @@ export const summonRequests = pgTable("summon_requests", {
   tweetId: text("tweet_id").notNull(),
   requester: text("requester").default(""),
   targetUrl: text("target_url").default(""),
-  status: text("status").notNull().default("received"), // received|resolved|clipped|replied|failed
+  status: text("status").notNull().default("received"), // received|resolved|clipped|replied|failed|rejected|no_video
   candidateId: integer("candidate_id").references(() => candidates.id),
   createdAt: ts("created_at").defaultNow(),
 });

@@ -62,7 +62,6 @@ export async function runSummon(): Promise<SummonResult> {
     if (processed >= MAX_REPLIES_PER_RUN) break;
     if (slots <= 0) break; // no free render slot — leave this mention for the next poll
     cursor = m.tweetId; // committing to a decision on this mention now
-    if (!m.targetUrl) continue; // nothing to clip — no video URL in the mention or its parent
 
     // Dedup by mention id — never reply to the same summon twice.
     const seen = await database
@@ -71,6 +70,26 @@ export async function runSummon(): Promise<SummonResult> {
       .where(eq(summonRequests.tweetId, m.tweetId))
       .limit(1);
     if (seen.length) continue;
+
+    // No video URL in the mention or its parent: tell the user HOW to summon instead of
+    // silently ignoring them (a bare "@videoclipthis" in a text thread is the #1 first try).
+    if (!m.targetUrl) {
+      await database.insert(summonRequests).values({
+        tweetId: m.tweetId, requester: m.requester, targetUrl: "", status: "no_video",
+      });
+      try {
+        await xPublisher().publish({
+          clipUrl: "",
+          postText: `I don't see a video to clip 👀 Tag me in a reply to a post that links a YouTube or Vimeo video (5+ min) and I'll pull out the best moment 🎬`,
+          costUsd: 0, durationS: 0,
+        }, m.tweetId);
+        await logEvent("skipped", `Summon from @${m.requester} had no video URL — replied with instructions`);
+      } catch (e) {
+        await logEvent("error", `Summon no-video reply failed for @${m.requester}: ${(e as Error).message}`);
+      }
+      processed++; // the reply counts against the per-run reply budget
+      continue;
+    }
 
     // Gates BEFORE spending a render, cheapest first. Summon is an open door (any X user,
     // any URL): (1) allowlisted video hosts only; (2) source must be long enough to contain
@@ -131,6 +150,18 @@ export async function runSummon(): Promise<SummonResult> {
         .where(eq(candidates.id, cand.id));
       await database.update(summonRequests).set({ status: "clipped" }).where(eq(summonRequests.id, req.id));
       await logEvent("rendering", `Summon: rendering a clip of ${m.targetUrl} for @${m.requester}`, "summon_requests", req.id);
+      // Instant acknowledgment so the requester knows it's working — the clip itself takes
+      // minutes to render and arrives as a second reply. Best-effort: an ack failure must
+      // not fail the render that was just submitted.
+      try {
+        await xPublisher().publish({
+          clipUrl: "",
+          postText: `🎬 On it — watching the video and pulling out the best moment. I'll reply with the clip in a few minutes.`,
+          costUsd: 0, durationS: 0,
+        }, m.tweetId);
+      } catch (e) {
+        await logEvent("error", `Summon ack reply failed for @${m.requester}: ${(e as Error).message}`, "summon_requests", req.id);
+      }
       processed++;
       slots--;
     } catch (e) {
