@@ -3,7 +3,7 @@ import { db, candidates, clips, runs } from "@/lib/db";
 import { getSettings, parseWatchChannels, parseSearchTopics, updateSummonState } from "@/lib/settings";
 import {
   COST_CAP_USD, DEFAULT_THRESHOLD, MAX_CLIPS_PER_RUN, MAX_CONCURRENT_RENDERS, FIGURE_SEARCH_INTERVAL_H,
-  SEARCH_TOPICS, SEARCH_BUDGET_PER_BURST,
+  SEARCH_TOPICS, SEARCH_BUDGET_PER_BURST, WATCHLIST,
 } from "./config";
 import { requireScoutEnv } from "./env";
 import { slog } from "./util";
@@ -66,6 +66,11 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
     ...figures.map((f) => ({ term: f.name, figure: f })),
     ...topicList.map((t) => ({ term: t })),
   ];
+  const watchedChannels = parseWatchChannels(cfg).length ? parseWatchChannels(cfg) : WATCHLIST.youtubeChannels;
+  // Channel name → its X handle, for brand tags on search-discovered videos of watched channels.
+  const brandXByName = new Map(
+    watchedChannels.filter((c) => c.xHandle).map((c) => [c.name.toLowerCase(), c.xHandle as string]),
+  );
   const sources = buildSources(figures, {
     channels: parseWatchChannels(cfg), // settings override → point the bot at any niche
     search: searchDue ? { terms: searchTerms, budget: SEARCH_BUDGET_PER_BURST, offset: cfg.searchOffset ?? 0 } : null,
@@ -155,6 +160,13 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
     for (const d of detected) {
       found++;
 
+      // Brand tag fallback for search-discovered videos: when the video's channel is one of
+      // the configured watched channels (matched by name), carry its X handle so the post can
+      // tag the brand ("via @…") even though discovery came via search, not the channel feed.
+      if (!d.channelXHandle && d.channel) {
+        d.channelXHandle = brandXByName.get(d.channel.toLowerCase());
+      }
+
       // Track key AI figures: if a tracked figure is the speaker, resolve their @ so we can
       // always credit + tag them (turns an un-attributed talk into a creditable clip).
       const fig = matchFigure(figures, d);
@@ -174,7 +186,7 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       const [cand] = await database.insert(candidates).values({
         source: d.source, url: d.url, videoId: d.videoId, title: d.title,
         speaker: d.speaker ?? "", speakerHandle: d.speakerHandle ?? "",
-        channel: d.channel ?? "", event: d.event ?? "",
+        channel: d.channel ?? "", channelXHandle: d.channelXHandle ?? "", event: d.event ?? "",
         durationS: d.durationS ?? 0, signalStrength: d.signalStrength ?? 0,
         figureName: d.figureName ?? null,
         status: "found",

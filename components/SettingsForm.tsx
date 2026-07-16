@@ -82,7 +82,7 @@ export default function SettingsForm({ initial }: { initial: Initial }) {
         />
       </label>
       <label className="block">
-        <span className="mb-1 block">Watched channels <span className="text-xs text-neutral-500">(one per line: Name | youtubeHandle — handle optional; empty = built-in defaults. Track <em>people</em> on the Figures page.)</span></span>
+        <span className="mb-1 block">Watched channels <span className="text-xs text-neutral-500">(one per line: Name | youtubeHandle | xHandle — handles optional; the X handle lets posts tag the brand (&quot;via @…&quot;). Empty = built-in defaults. Track <em>people</em> on the Figures page.)</span></span>
         <textarea
           rows={5} value={watchChannels} onChange={(e) => setWatchChannels(e.target.value)}
           className="w-full rounded bg-neutral-800 p-2 text-sm font-mono"

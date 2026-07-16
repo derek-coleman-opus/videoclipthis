@@ -14,6 +14,7 @@ export const candidates = pgTable("candidates", {
   speaker: text("speaker").default(""),
   speakerHandle: text("speaker_handle").default(""), // resolved X handle (no @); "" => held
   channel: text("channel").default(""),
+  channelXHandle: text("channel_x_handle").default(""),  // brand/channel X handle (no @) — operator-verified
   event: text("event").default(""),
   durationS: integer("duration_s").default(0),
   publishedAt: ts("published_at"),

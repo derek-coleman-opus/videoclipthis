@@ -186,7 +186,7 @@ async function resolveChannelId(c: { name: string; handle?: string }, apiKey: st
 /** Watches org channels (WATCHLIST) + tracked figures' channels for fresh long-form uploads, and
  *  (when a search plan is given) runs a rotated window of figure/topic searches within budget. */
 export function youtubeSource(
-  channels: { name: string; handle?: string }[],
+  channels: { name: string; handle?: string; xHandle?: string }[],
   apiKey: string,
   figures: Figure[],
   search: SearchPlan | null,
@@ -196,15 +196,20 @@ export function youtubeSource(
     async discover() {
       if (!apiKey) return [];
       const ids = new Set<string>();
+      const brandXById = new Map<string, string>(); // channel id → its X handle (for brand tags)
       for (const c of channels) {
         const id = await resolveChannelId(c, apiKey);
-        if (id) ids.add(id);
+        if (id) {
+          ids.add(id);
+          if (c.xHandle) brandXById.set(id, c.xHandle);
+        }
       }
       for (const f of figures) if (f.youtubeChannelId) ids.add(f.youtubeChannelId);
       const all: DetectedCandidate[] = [];
       for (const id of ids) {
         try {
-          all.push(...(await recentUploads(id, apiKey)));
+          const brandX = brandXById.get(id);
+          all.push(...(await recentUploads(id, apiKey)).map((d) => (brandX ? { ...d, channelXHandle: brandX } : d)));
         } catch (e) {
           console.warn(`youtube channel ${id} failed: ${(e as Error).message}`);
         }
@@ -235,7 +240,7 @@ export function youtubeSource(
 
 export function buildSources(
   figures: Figure[],
-  opts?: { channels?: { name: string; handle?: string }[]; search?: SearchPlan | null },
+  opts?: { channels?: { name: string; handle?: string; xHandle?: string }[]; search?: SearchPlan | null },
 ): Source[] {
   // Settings-provided channels (the admin "Watched channels" field) override the code
   // WATCHLIST, so self-hosters can point the bot at their niche without a deploy.

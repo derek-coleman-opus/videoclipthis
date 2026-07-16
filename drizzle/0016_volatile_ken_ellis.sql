@@ -1,0 +1,1 @@
+ALTER TABLE "candidates" ADD COLUMN "channel_x_handle" text DEFAULT '';
