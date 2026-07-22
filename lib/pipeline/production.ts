@@ -27,10 +27,11 @@ export function composeSummonReply(c: DetectedCandidate, m: Moment): string {
   return `🎬 Here's the best ${len}s${credit} — ${m.hookCaption}\n\n${FOOTER}`;
 }
 
-/** Every post must TAG someone — the speaker's @ or the channel/brand's @. A clip with
- *  neither (name-only or fully unattributed) is held for the operator. */
+/** Tags are best-effort (auto-resolved + verified when possible) and never hold a clip up —
+ *  a text-name credit is an acceptable fallback. Only a clip with NO attribution at all
+ *  (no handle, no speaker name, no channel name) is held for the operator. */
 export function needsCreditResolution(c: DetectedCandidate): boolean {
-  return !(c.speakerHandle || c.channelXHandle);
+  return !(c.speakerHandle || c.channelXHandle || c.speaker || c.channel);
 }
 
 export interface ProducedClip {

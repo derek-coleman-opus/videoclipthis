@@ -9,6 +9,7 @@ import { requireScoutEnv } from "./env";
 import { slog } from "./util";
 import { buildSources } from "./sources";
 import { claudeScorer } from "./scoring";
+import { resolveXHandle } from "./handleResolver";
 import { opusclipCreateProject } from "./opusclip";
 import { needsCreditResolution } from "./production";
 import { collectRenders } from "./render";
@@ -82,6 +83,9 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
     await updateSummonState({ figureSearchAt: new Date(), searchOffset: next });
   }
   const scorer = claudeScorer(process.env.ANTHROPIC_API_KEY ?? "", cfg.niche ?? "");
+  // Handle-resolution spend cap per run (each resolution = 1-3 Claude calls + 1-3 X reads,
+  // cached forever after). The cache means steady state costs ~nothing.
+  let resolveBudget = Number(process.env.HANDLE_RESOLVE_PER_RUN ?? 6);
   const opusKey = process.env.OPUSCLIP_API_KEY ?? "";
   const opusBase = process.env.OPUSCLIP_API_BASE ?? "";
   const threshold = cfg.threshold ?? DEFAULT_THRESHOLD;
@@ -222,10 +226,30 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
         await logEvent("skipped", `Skipped [${score}]: ${d.title}`, "candidates", cand.id);
         skipped++; continue;
       }
-      // Credit-first rule — never post what we can't attribute.
+
+      // Best-effort tag resolution — AFTER the score gate so it only spends on clips that will
+      // actually render. Claude proposes handles, the live X profile verifies (wrong tag is
+      // worse than no tag); results are cached so each name costs API calls once. Failure to
+      // resolve NEVER holds the clip — it posts with a text-name credit instead.
+      const resolveCtx = `speaker/channel of "${d.title}"${d.channel ? ` (YouTube channel: ${d.channel})` : ""}`;
+      if (!d.speakerHandle && d.speaker && resolveBudget > 0) {
+        resolveBudget--;
+        d.speakerHandle = (await resolveXHandle("person", d.speaker, resolveCtx)) ?? undefined;
+      }
+      if (!d.channelXHandle && d.channel && resolveBudget > 0) {
+        resolveBudget--;
+        d.channelXHandle = (await resolveXHandle("brand", d.channel, resolveCtx)) ?? undefined;
+      }
+      if (d.speakerHandle || d.channelXHandle) {
+        await database.update(candidates)
+          .set({ speakerHandle: d.speakerHandle ?? "", channelXHandle: d.channelXHandle ?? "" })
+          .where(eq(candidates.id, cand.id));
+      }
+
+      // Only a clip with NO attribution at all (no name, no handle, no channel) is held.
       if (needsCreditResolution(d)) {
         await database.update(candidates).set({ status: "held" }).where(eq(candidates.id, cand.id));
-        await logEvent("held", `Held [${score}] — no speaker credit: ${d.title}`, "candidates", cand.id);
+        await logEvent("held", `Held [${score}] — no attribution at all: ${d.title}`, "candidates", cand.id);
         skipped++; continue;
       }
 

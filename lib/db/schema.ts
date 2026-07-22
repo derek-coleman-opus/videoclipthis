@@ -57,6 +57,20 @@ export const clips = pgTable("clips", {
   statusIdx: index("clips_status_idx").on(t.status),
 }));
 
+/** Verified X-handle cache: name → handle, resolved once (Claude proposes, the real X profile
+ *  verifies) and reused forever. handle="" records a failed resolution so we don't re-spend. */
+export const resolvedHandles = pgTable("resolved_handles", {
+  id: serial("id").primaryKey(),
+  kind: text("kind").notNull(),                    // person | brand
+  name: text("name").notNull(),                    // normalized (lowercased) lookup key
+  handle: text("handle").notNull().default(""),    // verified X username (no @); "" = none found
+  confidence: real("confidence").default(0),
+  evidence: text("evidence").default(""),          // why the verifier believed the match
+  createdAt: ts("created_at").defaultNow(),
+}, (t) => ({
+  nameKindIdx: uniqueIndex("resolved_handles_name_kind_idx").on(t.name, t.kind),
+}));
+
 /** Per-platform cross-post ledger: one row per (clip, social account) publish attempt via
  *  OpusClip post-tasks. Distribution must never depend on a single platform again. */
 export const clipPublishes = pgTable("clip_publishes", {

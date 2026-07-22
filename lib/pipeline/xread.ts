@@ -133,6 +133,37 @@ export async function fetchMentions(
   return { mentions, newestId: res.meta?.newest_id ?? null };
 }
 
+export interface XProfile {
+  username: string;
+  name: string;
+  bio: string;
+  followers: number;
+}
+
+/** Public profile lookup — ground truth for handle verification. Null when the user
+ *  doesn't exist (or the lookup fails); callers treat null as "cannot verify → no tag". */
+export async function fetchUserProfile(username: string): Promise<XProfile | null> {
+  try {
+    const client = await v2();
+    const res: any = await withRetry(
+      () => client.userByUsername(username.replace(/^@/, ""), {
+        "user.fields": ["description", "public_metrics", "name", "username"],
+      }),
+      { label: "x user lookup" },
+    );
+    const u = res?.data;
+    if (!u?.username) return null;
+    return {
+      username: String(u.username),
+      name: String(u.name ?? ""),
+      bio: String(u.description ?? ""),
+      followers: Number(u.public_metrics?.followers_count ?? 0),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export interface TweetVideo {
   tweetId: string;
   authorUsername: string;

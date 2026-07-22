@@ -66,6 +66,17 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS "clip_publishes_clip_idx" ON "clip_publishes" ("clip_id")`,
   // candidates: brand/channel X handle for "tag the speaker AND the brand" (0016)
   `ALTER TABLE "candidates" ADD COLUMN IF NOT EXISTS "channel_x_handle" text DEFAULT ''`,
+  // verified X-handle cache for automatic tag resolution (0017)
+  `CREATE TABLE IF NOT EXISTS "resolved_handles" (
+     "id" serial PRIMARY KEY NOT NULL,
+     "kind" text NOT NULL,
+     "name" text NOT NULL,
+     "handle" text NOT NULL DEFAULT '',
+     "confidence" real DEFAULT 0,
+     "evidence" text DEFAULT '',
+     "created_at" timestamp with time zone DEFAULT now()
+   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "resolved_handles_name_kind_idx" ON "resolved_handles" ("name", "kind")`,
   // figures: DB-backed tracked-people table
   `CREATE TABLE IF NOT EXISTS "figures" (
      "id" serial PRIMARY KEY NOT NULL,
