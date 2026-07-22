@@ -6,10 +6,15 @@ export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
 
-/** Paths anyone may load without a password. Keep this list tight: the public surface
- *  of an open-source deployment is the landing page and nothing else. */
+/** Paths anyone may load without a password. Keep this list tight: the public surface is
+ *  the landing page + the SEO clip library (posted clips only) + crawler plumbing. */
 function isPublic(pathname: string): boolean {
-  return pathname === "/";
+  return (
+    pathname === "/" ||
+    pathname === "/clips" || pathname.startsWith("/clips/") ||
+    pathname.startsWith("/speakers/") ||
+    pathname === "/sitemap.xml" || pathname === "/robots.txt"
+  );
 }
 
 export function middleware(req: NextRequest) {

@@ -103,7 +103,9 @@ export default async function PublicHomePage() {
                     className="mb-3 aspect-[9/16] w-full rounded-md border border-neutral-800 bg-black object-contain"
                   />
                 )}
-                <p className="mb-2 line-clamp-3 text-sm text-neutral-200">{c.hookCaption || c.postText}</p>
+                <Link href={`/clips/${c.id}`} className="mb-2 line-clamp-3 text-sm text-neutral-200 hover:underline">
+                  {c.hookCaption || c.postText}
+                </Link>
                 <p className="mb-3 line-clamp-2 text-xs text-neutral-500">
                   {c.speaker ? `${c.speaker} — ` : ""}{c.title}
                 </p>
@@ -123,6 +125,11 @@ export default async function PublicHomePage() {
             ))}
           </ul>
         )}
+        <p className="mt-6 text-center text-sm">
+          <Link href="/clips" className="text-neutral-300 underline hover:text-white">
+            Browse the full clip library →
+          </Link>
+        </p>
       </section>
 
       <footer className="border-t border-neutral-800 pt-6 text-center text-xs text-neutral-600">
