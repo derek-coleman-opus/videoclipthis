@@ -46,6 +46,24 @@ async function claudeJson(system: string, user: string, maxTokens = 200): Promis
   return JSON.parse(m ? m[0] : text);
 }
 
+const EXTRACT_PROMPT = `Extract the primary HUMAN speaker's full name from a video title and
+channel — a person, never a company/channel/brand (conference titles often end "— Name, Company").
+If several people, pick the main one. If no person is identifiable, use null.
+Return JSON: {"speaker": "<full name>" | null}.`;
+
+/** Title-only speaker extraction — used to rescue candidates recorded before the scorer
+ *  started extracting speakers (no stored transcript, so the title is what we have). */
+export async function extractPersonName(title: string, channel: string): Promise<string | null> {
+  try {
+    const obj = await claudeJson(EXTRACT_PROMPT, `Title: ${title}\nChannel: ${channel}`);
+    const s = typeof obj?.speaker === "string" ? obj.speaker.trim() : "";
+    return s && s.toLowerCase() !== "null" ? s : null;
+  } catch (e) {
+    slog("extract_person_error", { title, error: (e as Error).message });
+    return null;
+  }
+}
+
 const PROPOSE_PROMPT = `You suggest X (Twitter) usernames for a given person or organization.
 Return up to 3 usernames you believe ACTUALLY EXIST for the subject, best guess first, without @.
 Only include usernames you have real knowledge of — never invent plausible-looking ones.
