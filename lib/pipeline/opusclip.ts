@@ -71,7 +71,8 @@ export function buildCurationPrompt(ctx: CurationContext = {}): string {
     `Prioritize, in order: (1) a bold or surprising claim, hot take, or strong opinion; (2) a new announcement, release, or number; (3) a live demo moment; (4) a sharp, quotable insight or framework the viewer can apply.`,
     `The clip must be fully self-contained: it starts at the beginning of a thought and ends at its natural conclusion — never cut mid-sentence and never depend on context the viewer hasn't seen.`,
     `The first 2-3 seconds must work as a hook for someone scrolling a feed with sound off — a strong spoken opening line, not a slow wind-up.`,
-    `Reject boring segments: skip stretches where the speaker is only reading slides, narrating a roadmap, or where nothing surprising is said. The chosen moment must stand on the strength of what is SPOKEN, not the visuals (the source is often just slides or a whiteboard).`,
+    `STRONGLY prefer moments where the speaker is clearly VISIBLE on camera — face or upper body in frame (podcast desk, interview, on-stage shot). A slide, code editor, or screen-share with a disembodied voice makes a dead vertical clip; only fall back to such a moment if the speaker never appears on camera in the entire video.`,
+    `Reject boring segments: skip stretches where the speaker is only reading slides, narrating a roadmap, or where nothing surprising is said.`,
     `Avoid: intros, speaker introductions, thank-yous, audience Q&A logistics, sponsor reads, and generic high-level summaries.`,
     `Format for X: vertical 9:16, with accurate burned-in captions (most viewers watch muted), 30-90 seconds long.`,
   ].join(" ");

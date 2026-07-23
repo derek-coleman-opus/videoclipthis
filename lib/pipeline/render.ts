@@ -49,6 +49,15 @@ export async function expireStaleClips(): Promise<number> {
   return rows.length;
 }
 
+function parseExtraTags(json: string | null): string[] {
+  try {
+    const arr = JSON.parse(json ?? "[]");
+    return Array.isArray(arr) ? arr.map(String).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
 function toDetected(row: Candidate): DetectedCandidate {
   return {
     source: row.source,
@@ -59,6 +68,7 @@ function toDetected(row: Candidate): DetectedCandidate {
     speakerHandle: row.speakerHandle ?? "",
     channel: row.channel ?? "",
     channelXHandle: row.channelXHandle ?? "",
+    extraTags: parseExtraTags(row.extraTags),
     event: row.event ?? "",
     durationS: row.durationS ?? 0,
     figureName: row.figureName ?? undefined,

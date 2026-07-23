@@ -8,6 +8,7 @@ export interface DetectedCandidate {
   speakerHandle?: string;   // resolved X handle (no @) of the human speaker
   channel?: string;
   channelXHandle?: string;  // the channel/brand's X handle (no @) — operator-verified, never guessed
+  extraTags?: string[];     // verified handles of orgs/products central to the clip (cc'd in the post)
   event?: string;
   durationS?: number;
   publishedAt?: Date | null;

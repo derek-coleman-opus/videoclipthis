@@ -77,6 +77,8 @@ const STATEMENTS: string[] = [
      "created_at" timestamp with time zone DEFAULT now()
    )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "resolved_handles_name_kind_idx" ON "resolved_handles" ("name", "kind")`,
+  // candidates: verified entity tags cc'd in posts (0018)
+  `ALTER TABLE "candidates" ADD COLUMN IF NOT EXISTS "extra_tags" text DEFAULT '[]'`,
   // figures: DB-backed tracked-people table
   `CREATE TABLE IF NOT EXISTS "figures" (
      "id" serial PRIMARY KEY NOT NULL,
