@@ -1,0 +1,1 @@
+ALTER TABLE "candidates" ADD COLUMN "extra_tags" text DEFAULT '[]';

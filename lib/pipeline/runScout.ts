@@ -240,9 +240,30 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
         resolveBudget--;
         d.channelXHandle = (await resolveXHandle("brand", d.channel, resolveCtx)) ?? undefined;
       }
-      if (d.speakerHandle || d.channelXHandle) {
+      // Entity tags: the scorer names orgs/products CENTRAL to the content — verified tags of
+      // accounts that might actually engage. Tags drive the likes; resolve up to 2 per clip.
+      const alreadyTagged = new Set(
+        [d.speakerHandle, d.channelXHandle, d.speaker, d.channel]
+          .filter(Boolean).map((v) => (v as string).toLowerCase()),
+      );
+      d.extraTags = [];
+      for (const entity of scored.entities.slice(0, 2)) {
+        if (resolveBudget <= 0 || d.extraTags.length >= 2) break;
+        if (alreadyTagged.has(entity.toLowerCase())) continue;
+        resolveBudget--;
+        const h = await resolveXHandle("brand", entity, resolveCtx);
+        if (h && !alreadyTagged.has(h.toLowerCase())) {
+          d.extraTags.push(h);
+          alreadyTagged.add(h.toLowerCase());
+        }
+      }
+
+      if (d.speakerHandle || d.channelXHandle || d.extraTags.length) {
         await database.update(candidates)
-          .set({ speakerHandle: d.speakerHandle ?? "", channelXHandle: d.channelXHandle ?? "" })
+          .set({
+            speakerHandle: d.speakerHandle ?? "", channelXHandle: d.channelXHandle ?? "",
+            extraTags: JSON.stringify(d.extraTags),
+          })
           .where(eq(candidates.id, cand.id));
       }
 

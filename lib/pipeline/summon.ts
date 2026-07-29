@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { db, candidates, summonRequests } from "@/lib/db";
 import { requireScoutEnv, requireXEnv, requireXReadEnv } from "./env";
 import { getSettings, updateSummonState } from "@/lib/settings";
@@ -9,6 +9,7 @@ import {
   screenSummonTarget, screenXVideoTarget, xStatusIdFromUrl,
 } from "./clipSafety";
 import { xPublisher } from "./publishing";
+import { serviceRepliesSince } from "./xledger";
 import { reportHealth } from "@/lib/xbot/health";
 import { collectRenders } from "./render";
 import { logEvent } from "./events";
@@ -23,6 +24,20 @@ export interface SummonResult {
 // Never start more than this many summon renders in a single poll — guards against a
 // thundering herd of mentions (and the X policy "don't be spammy" line).
 const MAX_REPLIES_PER_RUN = 5;
+
+// Daily budget for SERVICE replies (instructions/too-short/bad-host) — goodwill spend,
+// each one a billed X write. Renders + acks are bounded separately by the render slots.
+const SERVICE_REPLIES_PER_DAY = Number(process.env.SUMMON_SERVICE_REPLIES_PER_DAY ?? 20);
+
+/** How many service-type replies this requester triggered in the last 24h. */
+async function countRequesterServiceReplies(requester: string): Promise<number> {
+  const since = new Date(Date.now() - 24 * 3600_000);
+  const rows = await db()
+    .select({ id: summonRequests.id, status: summonRequests.status, createdAt: summonRequests.createdAt })
+    .from(summonRequests)
+    .where(and(eq(summonRequests.requester, requester), gte(summonRequests.createdAt, since)));
+  return rows.filter((r) => r.status === "no_video" || r.status === "rejected").length;
+}
 
 /** Reactive mode: clip whatever a user tags @videoclipthis under, and reply in-thread.
  *  Two-phase like Scout: this submits the render and exits; collectRenders() (run here and at
@@ -98,12 +113,25 @@ export async function runSummon(): Promise<SummonResult> {
       });
       await logEvent("skipped", `Summon ${status} (@${m.requester}): ${gate.log}`);
       if (gate.action === "reply") {
-        try {
-          await xPublisher().publish({ clipUrl: "", postText: gate.text, costUsd: 0, durationS: 0 }, m.tweetId);
-        } catch (e) {
-          await logEvent("error", `Summon reply failed for @${m.requester}: ${(e as Error).message}`);
+        // Service replies (instructions / too-short / bad-host) are goodwill, not content —
+        // and every one is a BILLED write. Budget them: a global daily cap, and max 2/day per
+        // requester so a confused user (or another bot) can't drain the budget in a loop.
+        const [globalUsed, requesterUsed] = await Promise.all([
+          serviceRepliesSince(24),
+          countRequesterServiceReplies(m.requester),
+        ]);
+        if (globalUsed >= SERVICE_REPLIES_PER_DAY) {
+          await logEvent("skipped", `Summon service-reply daily budget (${SERVICE_REPLIES_PER_DAY}) reached — @${m.requester} not answered`);
+        } else if (requesterUsed >= 2) {
+          await logEvent("skipped", `Summon: @${m.requester} already got 2 service replies today — not answering again`);
+        } else {
+          try {
+            await xPublisher().publish({ clipUrl: "", postText: gate.text, costUsd: 0, durationS: 0 }, m.tweetId, "summon_service");
+          } catch (e) {
+            await logEvent("error", `Summon reply failed for @${m.requester}: ${(e as Error).message}`);
+          }
+          processed++; // the reply counts against the per-run reply budget
         }
-        processed++; // the reply counts against the per-run reply budget
       }
       continue;
     }
@@ -134,7 +162,7 @@ export async function runSummon(): Promise<SummonResult> {
           clipUrl: "",
           postText: `🎬 On it — watching the video and pulling out the best moment. I'll reply with the clip in a few minutes.`,
           costUsd: 0, durationS: 0,
-        }, m.tweetId);
+        }, m.tweetId, "summon_ack");
       } catch (e) {
         await logEvent("error", `Summon ack reply failed for @${m.requester}: ${(e as Error).message}`, "summon_requests", req.id);
       }

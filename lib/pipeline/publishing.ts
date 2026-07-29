@@ -1,11 +1,13 @@
 import type { ProducedClip } from "./production";
+import { recordXWrite, type XWriteKind } from "./xledger";
 
 export interface PublishResult {
   xPostId: string | null;
 }
 
 export interface Publisher {
-  publish(clip: ProducedClip, replyTo?: string | null): Promise<PublishResult>;
+  /** `kind` feeds the x_writes ledger — every billed write must be attributable. */
+  publish(clip: ProducedClip, replyTo?: string | null, kind?: XWriteKind): Promise<PublishResult>;
 }
 
 // X amplify_video hard cap is 512MB; we keep well under it. Guard so a runaway render can't
@@ -40,7 +42,7 @@ function describeXError(e: unknown): Error {
 
 export function xPublisher(): Publisher {
   return {
-    async publish(clip, replyTo) {
+    async publish(clip, replyTo, kind = "clip_post") {
       const { TwitterApi, EUploadMimeType } = await import("twitter-api-v2");
       const client = new TwitterApi({
         appKey: process.env.X_API_KEY ?? "",
@@ -66,9 +68,12 @@ export function xPublisher(): Publisher {
         if (mediaId) payload.media = { media_ids: [mediaId] };
         if (replyTo) payload.reply = { in_reply_to_tweet_id: replyTo };
         const res = await client.v2.tweet(payload as any);
+        await recordXWrite({ kind, ok: true, tweetId: res.data.id, replyTo });
         return { xPostId: res.data.id };
       } catch (e) {
-        throw describeXError(e);
+        const err = describeXError(e);
+        await recordXWrite({ kind, ok: false, replyTo, detail: err.message });
+        throw err;
       }
     },
   };

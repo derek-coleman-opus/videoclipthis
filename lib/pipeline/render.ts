@@ -49,6 +49,15 @@ export async function expireStaleClips(): Promise<number> {
   return rows.length;
 }
 
+function parseExtraTags(json: string | null): string[] {
+  try {
+    const arr = JSON.parse(json ?? "[]");
+    return Array.isArray(arr) ? arr.map(String).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
 function toDetected(row: Candidate): DetectedCandidate {
   return {
     source: row.source,
@@ -59,6 +68,7 @@ function toDetected(row: Candidate): DetectedCandidate {
     speakerHandle: row.speakerHandle ?? "",
     channel: row.channel ?? "",
     channelXHandle: row.channelXHandle ?? "",
+    extraTags: parseExtraTags(row.extraTags),
     event: row.event ?? "",
     durationS: row.durationS ?? 0,
     figureName: row.figureName ?? undefined,
@@ -190,6 +200,21 @@ export async function drainApprovedClips(cfg?: Settings): Promise<number> {
   const database = db();
   const settings = cfg ?? (await getSettings());
 
+  // Recover claims orphaned by a crash mid-publish: the tweet MAY have gone out before the
+  // invocation died, so never auto-retry — park as failed for a human to verify on X first.
+  const stuck = await database
+    .select({ id: clips.id, failReason: clips.failReason })
+    .from(clips).where(eq(clips.status, "posting"));
+  for (const s of stuck) {
+    const claimedAt = Number((s.failReason ?? "").replace("claimed:", "")) || 0;
+    if (Date.now() - claimedAt > 15 * 60 * 1000) {
+      await database.update(clips)
+        .set({ status: "failed", failReason: "publish interrupted mid-flight — check the account on X for this post before retrying" })
+        .where(and(eq(clips.id, s.id), eq(clips.status, "posting")));
+      await logEvent("error", `Clip #${s.id} publish was interrupted — verify on X before retrying`, "clips", s.id);
+    }
+  }
+
   const queue = await database
     .select().from(clips)
     .where(eq(clips.status, "approved"))
@@ -217,6 +242,15 @@ export async function drainApprovedClips(cfg?: Settings): Promise<number> {
       if (lastPostedAt && Date.now() - lastPostedAt < gapMs) break; // paced — next cycle picks it up
     }
 
+    // Atomic claim: this drain runs on BOTH the scout (30m) and summon (5m) crons, and the
+    // two can overlap at the same minute — without the claim, both would publish the same
+    // clip (a double post billed twice). Zero rows updated = another invocation owns it.
+    const claimed = await database.update(clips)
+      .set({ status: "posting", failReason: `claimed:${Date.now()}` })
+      .where(and(eq(clips.id, clip.id), eq(clips.status, "approved")))
+      .returning({ id: clips.id });
+    if (!claimed.length) continue;
+
     try {
       const res = await xPublisher().publish(
         {
@@ -226,6 +260,7 @@ export async function drainApprovedClips(cfg?: Settings): Promise<number> {
           durationS: Math.max(0, Math.round((clip.endS ?? 0) - (clip.startS ?? 0))),
         },
         clip.replyTo ?? null,
+        isSummon ? "summon_clip" : "clip_post",
       );
       await markClipPosted(clip, res.xPostId);
       lastPostedAt = Date.now();

@@ -15,6 +15,7 @@ export const candidates = pgTable("candidates", {
   speakerHandle: text("speaker_handle").default(""), // resolved X handle (no @); "" => held
   channel: text("channel").default(""),
   channelXHandle: text("channel_x_handle").default(""),  // brand/channel X handle (no @) — operator-verified
+  extraTags: text("extra_tags").default("[]"),           // JSON array of verified entity handles to cc in the post
   event: text("event").default(""),
   durationS: integer("duration_s").default(0),
   publishedAt: ts("published_at"),
@@ -55,6 +56,22 @@ export const clips = pgTable("clips", {
   postedAt: ts("posted_at"),
 }, (t) => ({
   statusIdx: index("clips_status_idx").on(t.status),
+}));
+
+/** Ledger of EVERY outbound write to X from the clip account — clip posts, summon clip
+ *  replies, acks, and service replies (instructions/too-short/bad-host). The X console bills
+ *  per post; this table is our side of that invoice, so a "260 posts billed, 44 visible"
+ *  surprise can be explained line by line. Failures are recorded too (ok=false). */
+export const xWrites = pgTable("x_writes", {
+  id: serial("id").primaryKey(),
+  kind: text("kind").notNull(),        // clip_post | summon_clip | summon_ack | summon_service | manual_post
+  ok: boolean("ok").notNull().default(true),
+  tweetId: text("tweet_id"),           // set on success
+  replyTo: text("reply_to"),           // in-reply-to tweet id, when a reply
+  detail: text("detail").default(""),  // error message on failure; short context otherwise
+  createdAt: ts("created_at").defaultNow(),
+}, (t) => ({
+  createdIdx: index("x_writes_created_idx").on(t.createdAt),
 }));
 
 /** Verified X-handle cache: name → handle, resolved once (Claude proposes, the real X profile

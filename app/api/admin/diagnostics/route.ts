@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { failingComponents, fetchXUsage, getXbotHealth } from "@/lib/xbot/health";
 import { effectiveCaps, inLockFreeze } from "@/lib/xbot/limits";
 import { getXbotSettings } from "@/lib/xbot/settings";
+import { xWriteStats } from "@/lib/pipeline/xledger";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -116,6 +117,17 @@ export async function GET() {
     }));
     report.anthropic = { ok: r.ok, status: r.status };
     if (!r.ok) problems.push(`Anthropic API: HTTP ${r.status} ${r.detail}`);
+  }
+
+  // 6.5 X write accounting: OUR count of billed writes, to reconcile against the X console.
+  try {
+    report.xWrites = {
+      last24h: await xWriteStats(24),
+      last30d: await xWriteStats(30 * 24),
+      note: "Every outbound tweet (clip posts, summon clips, acks, service replies) — compare last30d.total with the X console's billed post count.",
+    };
+  } catch (e) {
+    report.xWrites = { error: (e as Error).message };
   }
 
   // 7. XBot: component health (why did it stop), like-supply backlog, and X read-budget usage.

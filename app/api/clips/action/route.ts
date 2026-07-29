@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, clips } from "@/lib/db";
 import { requireXEnv } from "@/lib/pipeline/env";
 import { logEvent } from "@/lib/pipeline/events";
@@ -42,6 +42,16 @@ export async function POST(req: NextRequest) {
     await database.update(clips).set({ postText }).where(eq(clips.id, id));
   }
 
+  // Atomic claim: the cron drain may grab this clip in the same instant — zero rows updated
+  // means it's already being posted elsewhere; don't double-post (each attempt is billed).
+  const claimed = await database.update(clips)
+    .set({ status: "posting", failReason: `claimed:${Date.now()}` })
+    .where(and(eq(clips.id, id), eq(clips.status, clip.status)))
+    .returning({ id: clips.id });
+  if (!claimed.length) {
+    return NextResponse.json({ ok: false, error: "clip is being posted by the scheduler — refresh in a minute" }, { status: 409 });
+  }
+
   try {
     requireXEnv();
     const result = await xPublisher().publish(
@@ -52,6 +62,7 @@ export async function POST(req: NextRequest) {
         durationS: Math.max(0, Math.round((clip.endS ?? 0) - (clip.startS ?? 0))),
       },
       clip.replyTo ?? null,
+      "manual_post",
     );
     await markClipPosted({ ...clip, postText }, result.xPostId);
     return NextResponse.json({ ok: true, status: "posted", xPostId: result.xPostId });
