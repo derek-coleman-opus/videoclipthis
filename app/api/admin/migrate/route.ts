@@ -79,6 +79,17 @@ const STATEMENTS: string[] = [
   `CREATE UNIQUE INDEX IF NOT EXISTS "resolved_handles_name_kind_idx" ON "resolved_handles" ("name", "kind")`,
   // candidates: verified entity tags cc'd in posts (0018)
   `ALTER TABLE "candidates" ADD COLUMN IF NOT EXISTS "extra_tags" text DEFAULT '[]'`,
+  // x_writes: ledger of every billed outbound tweet (0019)
+  `CREATE TABLE IF NOT EXISTS "x_writes" (
+     "id" serial PRIMARY KEY NOT NULL,
+     "kind" text NOT NULL,
+     "ok" boolean NOT NULL DEFAULT true,
+     "tweet_id" text,
+     "reply_to" text,
+     "detail" text DEFAULT '',
+     "created_at" timestamp with time zone DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS "x_writes_created_idx" ON "x_writes" ("created_at")`,
   // figures: DB-backed tracked-people table
   `CREATE TABLE IF NOT EXISTS "figures" (
      "id" serial PRIMARY KEY NOT NULL,

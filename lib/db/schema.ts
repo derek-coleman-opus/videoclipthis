@@ -58,6 +58,22 @@ export const clips = pgTable("clips", {
   statusIdx: index("clips_status_idx").on(t.status),
 }));
 
+/** Ledger of EVERY outbound write to X from the clip account — clip posts, summon clip
+ *  replies, acks, and service replies (instructions/too-short/bad-host). The X console bills
+ *  per post; this table is our side of that invoice, so a "260 posts billed, 44 visible"
+ *  surprise can be explained line by line. Failures are recorded too (ok=false). */
+export const xWrites = pgTable("x_writes", {
+  id: serial("id").primaryKey(),
+  kind: text("kind").notNull(),        // clip_post | summon_clip | summon_ack | summon_service | manual_post
+  ok: boolean("ok").notNull().default(true),
+  tweetId: text("tweet_id"),           // set on success
+  replyTo: text("reply_to"),           // in-reply-to tweet id, when a reply
+  detail: text("detail").default(""),  // error message on failure; short context otherwise
+  createdAt: ts("created_at").defaultNow(),
+}, (t) => ({
+  createdIdx: index("x_writes_created_idx").on(t.createdAt),
+}));
+
 /** Verified X-handle cache: name → handle, resolved once (Claude proposes, the real X profile
  *  verifies) and reused forever. handle="" records a failed resolution so we don't re-spend. */
 export const resolvedHandles = pgTable("resolved_handles", {
