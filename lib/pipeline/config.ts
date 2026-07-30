@@ -25,11 +25,37 @@ export const WATCHLIST = {
 
 export const DEFAULT_THRESHOLD = 70;
 
-/** Hardening caps (env-overridable), ENFORCED in runScout before render submission:
- *  stop submitting once today's recorded clip spend reaches the cap, and never submit
- *  more than MAX_CLIPS_PER_RUN renders in a single run. */
-export const COST_CAP_USD = Number(process.env.COST_CAP_USD ?? 5);
+/** Hardening caps (env-overridable), ENFORCED in runScout before render submission.
+ *
+ *  These replace the old COST_CAP_USD guard, which was dead code: it summed `clips.cost_usd`,
+ *  but OpusClip bills in CREDITS (~1 per minute of SOURCE video) and never reports a per-clip
+ *  USD figure, so cost_usd is always 0 → the cap never fired and the only real brake was
+ *  MAX_CONCURRENT_RENDERS against a 30-minute cron (~144 submissions/day).
+ *
+ *  Billing happens at SUBMIT time and is driven by source-video length, so the caps are
+ *  denominated the same way: minutes of source video submitted per UTC day. */
 export const MAX_CLIPS_PER_RUN = Number(process.env.MAX_CLIPS_PER_RUN ?? 25);
+
+/** Stop submitting once this many minutes of SOURCE video have been submitted today. At ~1
+ *  OpusClip credit per source minute this is ≈ a daily credit budget. Default 600 min/day
+ *  (~10 h ≈ 600 credits, ~18k/month) — well inside a 90k/month plan with room for Summon. */
+export const DAILY_SOURCE_MINUTES_CAP = Number(process.env.DAILY_SOURCE_MINUTES_CAP ?? 600);
+
+/** Never submit more renders per day than you could plausibly post. Posting is capped by
+ *  settings.dailyClipCap; renders overshoot it because not every render yields a postable clip
+ *  and review-mode clips expire unposted. This multiplier is that allowance — submissions can
+ *  exceed the post cap, but not without bound. */
+export const RENDER_SUBMIT_MULTIPLIER = Number(process.env.RENDER_SUBMIT_MULTIPLIER ?? 3);
+
+/** Give up on a candidate after this many paid create attempts. The create POST is no longer
+ *  retried at the HTTP layer (a non-idempotent POST that succeeded server-side but failed on the
+ *  response path would be charged again), so retries happen here — bounded, and one per run. */
+export const MAX_SUBMIT_ATTEMPTS = Number(process.env.MAX_SUBMIT_ATTEMPTS ?? 3);
+
+/** Refuse to submit when the OpusClip plan has fewer than this many monthly credits left, so a
+ *  long video can't push the account past its cap mid-render. Best-effort: skipped if the usage
+ *  endpoint is unreachable or returns a shape we don't recognize. */
+export const MIN_CREDITS_REMAINING = Number(process.env.MIN_CREDITS_REMAINING ?? 200);
 
 /** Auto-post pacing: minimum minutes between consecutive clip posts (scout kind). The daily
  *  volume cap itself lives in settings.dailyClipCap so it's tunable from the admin. */

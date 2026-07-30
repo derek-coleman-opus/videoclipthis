@@ -2,6 +2,7 @@ import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { db, candidates, clips, events, runs } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import RunButton from "@/components/RunButton";
+import DbError from "@/components/DbError";
 
 export const dynamic = "force-dynamic";
 
@@ -49,16 +50,7 @@ export default async function Dashboard() {
   try {
     data = await loadData();
   } catch (e) {
-    return (
-      <div className="rounded-lg border border-amber-800 bg-amber-950/40 p-4 text-sm">
-        <p className="font-medium text-amber-300">Database not ready</p>
-        <p className="mt-1 text-neutral-300">{(e as Error).message}</p>
-        <p className="mt-2 text-neutral-400">
-          Set <code>DATABASE_URL</code>, run <code>npm run db:push</code>, then click{" "}
-          “Run Scout now”.
-        </p>
-      </div>
-    );
+    return <DbError error={e} />;
   }
   const { totalFound, posted, postedToday, pending, queued, reshared, recent, lastRun, cfg } = data;
 

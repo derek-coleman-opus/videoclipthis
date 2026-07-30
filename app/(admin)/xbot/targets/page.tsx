@@ -1,3 +1,4 @@
+import DbError from "@/components/DbError";
 import { desc } from "drizzle-orm";
 import { db, xbotSeeds, xbotTargets } from "@/lib/db";
 import XbotTargetsManager from "@/components/XbotTargetsManager";
@@ -9,7 +10,7 @@ export default async function XbotTargetsPage() {
   try {
     data = await load();
   } catch (e) {
-    return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
+    return <DbError error={e} />;
   }
 
   return (

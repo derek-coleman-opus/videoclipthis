@@ -1,3 +1,4 @@
+import DbError from "@/components/DbError";
 import Link from "next/link";
 import { and, desc, eq, gte, like } from "drizzle-orm";
 import { db, events, xbotActions, xbotDrafts, xbotTargets, xbotTweets } from "@/lib/db";
@@ -22,7 +23,7 @@ export default async function XbotPage() {
   try {
     data = await load();
   } catch (e) {
-    return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
+    return <DbError error={e} />;
   }
   const { settings, today, pending, targetCount, engagedBack, feed, hasCreds, setupDone, lastActionAt, failing, likesStalled, unlikedBacklog, usage, caps } = data;
   const notReady = !settings.voiceNotes?.trim() || !settings.mission?.trim();

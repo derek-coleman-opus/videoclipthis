@@ -62,7 +62,7 @@ export async function runSummon(): Promise<SummonResult> {
 
   // Summon shares OpusClip's concurrent-render budget with Scout. Only take as many mentions
   // as there are free slots; the cursor stops before unhandled ones, so they're retried next
-  // poll (5 min) instead of failing the create call and dropping the user's request.
+  // poll (15 min) instead of failing the create call and dropping the user's request.
   const inFlight = Number(
     (await database.select({ n: sql<number>`count(*)::int` })
       .from(candidates).where(eq(candidates.status, "rendering")))[0]?.n ?? 0,

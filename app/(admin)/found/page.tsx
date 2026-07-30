@@ -1,3 +1,4 @@
+import DbError from "@/components/DbError";
 import { desc } from "drizzle-orm";
 import { db, candidates } from "@/lib/db";
 
@@ -17,7 +18,7 @@ export default async function FoundPage() {
   try {
     rows = await load();
   } catch (e) {
-    return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
+    return <DbError error={e} />;
   }
 
   return (

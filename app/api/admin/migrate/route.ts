@@ -89,6 +89,25 @@ const STATEMENTS: string[] = [
      "created_at" timestamp with time zone DEFAULT now()
    )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "figures_handle_idx" ON "figures" ("x_handle")`,
+  // candidates: bounded paid-render submit attempts (0018). The OpusClip create POST is billed and
+  // non-idempotent, so it is no longer retried at the HTTP layer — retries are counted here.
+  `ALTER TABLE "candidates" ADD COLUMN IF NOT EXISTS "submit_attempts" integer NOT NULL DEFAULT 0`,
+  // candidates: collapse duplicate video_ids so the unique index below can be created. Only rows
+  // with no clips are removed; see drizzle/0018 for the full reasoning.
+  `DELETE FROM "candidates" c
+     WHERE c."source" <> 'summon'
+       AND NOT EXISTS (SELECT 1 FROM "clips" cl WHERE cl."candidate_id" = c."id")
+       AND EXISTS (
+         SELECT 1 FROM "candidates" o
+         WHERE o."source" <> 'summon'
+           AND o."video_id" = c."video_id"
+           AND o."id" <> c."id"
+           AND (EXISTS (SELECT 1 FROM "clips" cl2 WHERE cl2."candidate_id" = o."id") OR o."id" < c."id")
+       )`,
+  // candidates: hard backstop against paying OpusClip twice for the same video (0018). Scoped to
+  // non-summon rows because summon stores the target URL in video_id and dedups by mention id.
+  `CREATE UNIQUE INDEX IF NOT EXISTS "candidates_video_id_uniq"
+     ON "candidates" ("video_id") WHERE "source" <> 'summon'`,
 ];
 
 export async function GET() {
