@@ -10,8 +10,10 @@
 // persists the project id on the candidate (status "rendering") and collects finished renders
 // on subsequent runs (lib/pipeline/render.ts).
 //
-// Billing is credit-based (GET /api/api-usage?q=mine) — no per-clip USD, so costUsd stays 0 and
-// volume control lives in MAX_CLIPS_PER_RUN.
+// Billing is credit-based (GET /api/api-usage?q=mine) at roughly 1 credit per MINUTE OF SOURCE
+// video, charged when the project is created — not when a clip is posted. So costUsd stays 0 and
+// spend control lives in the submit-time caps in ./config (DAILY_SOURCE_MINUTES_CAP,
+// RENDER_SUBMIT_MULTIPLIER, MAX_CLIPS_PER_RUN) plus the credit floor checked via opusclipUsage().
 
 import { withRetry } from "./util";
 
@@ -34,24 +36,63 @@ async function opusFetch(
   apiKey: string,
   base: string,
   body?: unknown,
+  opts: { retry?: boolean } = {},
 ): Promise<any> {
   const url = `${(base || DEFAULT_BASE).replace(/\/$/, "")}${path}`;
-  return withRetry(
-    async () => {
-      const res = await fetch(url, {
-        method,
-        headers: {
-          authorization: `Bearer ${apiKey}`,
-          "content-type": "application/json",
-          accept: "application/json",
-        },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-      if (!res.ok) throw new Error(`OpusClip ${method} ${path} ${res.status}: ${await res.text()}`);
-      return res.json();
-    },
-    { label: `opusclip ${method} ${path}` },
-  );
+  const once = async () => {
+    const res = await fetch(url, {
+      method,
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`OpusClip ${method} ${path} ${res.status}: ${await res.text()}`);
+    return res.json();
+  };
+  // Retry only what is safe to repeat. GETs are idempotent; a POST that creates a BILLED resource
+  // is not — if the server created the project but the response was lost (timeout, 5xx after
+  // create, connection reset), retrying charges for the same video again and only the last
+  // project id is ever persisted, so the extra projects are invisible in the admin. Callers that
+  // create resources retry at the candidate level instead (bounded by MAX_SUBMIT_ATTEMPTS).
+  const retry = opts.retry ?? method === "GET";
+  return retry ? withRetry(once, { label: `opusclip ${method} ${path}` }) : once();
+}
+
+// ── Plan usage (the credit meter that actually bills) ───────────────────────
+
+export interface OpusUsage {
+  /** Credits consumed in the current billing month. */
+  used: number | null;
+  /** Monthly credit allowance. */
+  limit: number | null;
+  /** limit - used, when both are known. */
+  remaining: number | null;
+  /** True when the workspace is exempt from caps — treat as unlimited headroom. */
+  uncapped: boolean;
+}
+
+/** Read the org's credit meter. Field names vary across response shapes, so pick defensively and
+ *  return nulls rather than guessing — callers must treat an unknown shape as "no signal", never
+ *  as "no credits left". */
+export async function opusclipUsage(apiKey: string, base: string): Promise<OpusUsage> {
+  const data = await opusFetch("GET", "/api/api-usage?q=mine", apiKey, base);
+  const d = data?.data ?? data ?? {};
+  const monthly = d.monthly ?? d.month ?? d;
+  const num = (v: unknown): number | null =>
+    v == null || v === "" || Number.isNaN(Number(v)) ? null : Number(v);
+
+  const used = num(monthly?.used ?? monthly?.usedCredits ?? monthly?.creditsUsed);
+  const limit = num(monthly?.limit ?? monthly?.quota ?? monthly?.creditLimit);
+  const remainingRaw = num(monthly?.remaining ?? monthly?.creditsRemaining);
+  return {
+    used,
+    limit,
+    remaining: remainingRaw ?? (used != null && limit != null ? limit - used : null),
+    uncapped: Boolean(d.uncapped ?? monthly?.uncapped ?? false),
+  };
 }
 
 /** Context that sharpens the curation prompt for a specific video. */
@@ -106,6 +147,19 @@ export function buildCreateProjectBody(
   return body;
 }
 
+/** True when a failed create PROVABLY did not bill us, so re-submitting is safe.
+ *
+ *  opusFetch throws `OpusClip POST /path <status>: <body>` only after the server answered. A 4xx
+ *  means the request was rejected outright — nothing was created, so a retry is free (429 included:
+ *  rate-limited, not charged). Anything else (timeout, connection reset, 5xx) is AMBIGUOUS: the
+ *  project may already exist and be billed while we never saw its id, so those must not be
+ *  retried — that is precisely how one video becomes several charges. */
+export function createProvablyNotBilled(e: unknown): boolean {
+  const m = (e as Error)?.message ?? String(e);
+  const status = /\s(\d{3}):/.exec(m)?.[1];
+  return status ? Number(status) >= 400 && Number(status) < 500 : false;
+}
+
 /** Submit a long video for clipping; returns the project id (rendering continues server-side). */
 export async function opusclipCreateProject(
   videoUrl: string,
@@ -114,7 +168,11 @@ export async function opusclipCreateProject(
   ctx: CurationContext = {},
   brandTemplateId?: string | null,
 ): Promise<string> {
-  const data = await opusFetch("POST", "/api/clip-projects", apiKey, base, buildCreateProjectBody(videoUrl, ctx, brandTemplateId));
+  const data = await opusFetch(
+    "POST", "/api/clip-projects", apiKey, base,
+    buildCreateProjectBody(videoUrl, ctx, brandTemplateId),
+    { retry: false }, // billed + non-idempotent — never auto-repeat (see opusFetch)
+  );
   const proj = data.data ?? data.project ?? data;
   const id = String(proj?.id ?? proj?.projectId ?? "");
   if (!id) throw new Error(`OpusClip: no project id in create response: ${JSON.stringify(data).slice(0, 300)}`);
@@ -195,7 +253,8 @@ export async function opusclipCreatePostTask(
     },
   };
   if (args.subAccountId) body.subAccountId = args.subAccountId;
-  const data = await opusFetch("POST", "/api/post-tasks", apiKey, base, body);
+  // Non-idempotent: a retry publishes the clip twice to the same account.
+  const data = await opusFetch("POST", "/api/post-tasks", apiKey, base, body, { retry: false });
   const task = data?.data ?? data;
   return task?.taskId ? String(task.taskId) : task?.id ? String(task.id) : null;
 }

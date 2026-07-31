@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable, serial, integer, real, text, boolean, timestamp, index, uniqueIndex,
 } from "drizzle-orm/pg-core";
@@ -23,6 +24,7 @@ export const candidates = pgTable("candidates", {
   figureName: text("figure_name"),                   // matched tracked AI figure, if any
   opusProjectId: text("opus_project_id"),            // OpusClip project rendering this candidate's clips
   renderStartedAt: ts("render_started_at"),          // when the render was SUBMITTED (timeout clock)
+  submitAttempts: integer("submit_attempts").notNull().default(0), // paid create attempts (see MAX_SUBMIT_ATTEMPTS)
   status: text("status").notNull().default("found"), // found|scored|held|skipped|rendering|selected|posted|failed
   score: integer("score"),
   rationale: text("rationale").default(""),
@@ -30,6 +32,14 @@ export const candidates = pgTable("candidates", {
 }, (t) => ({
   videoIdIdx: index("candidates_video_id_idx").on(t.videoId),
   statusIdx: index("candidates_status_idx").on(t.status),
+  // Hard backstop against paying OpusClip twice for the same video: the app-level dedup in
+  // runScout is a non-atomic select-then-insert, so two overlapping runs (cron + a manual
+  // "Run Scout now") could both pass it and submit two paid renders. Scoped to non-summon rows
+  // because summon stores the target URL in video_id and two people may legitimately summon the
+  // same video — that path is deduped by mention id instead.
+  videoIdUniq: uniqueIndex("candidates_video_id_uniq")
+    .on(t.videoId)
+    .where(sql`${t.source} <> 'summon'`),
 }));
 
 /** A produced clip (credit-first post) — scout posts and summon replies. */

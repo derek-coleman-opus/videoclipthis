@@ -1,3 +1,4 @@
+import DbError from "@/components/DbError";
 import Link from "next/link";
 import { getXbotSettings, parseSetupChecklist } from "@/lib/xbot/settings";
 import { SETUP_ITEMS } from "@/lib/xbot/playbook";
@@ -38,7 +39,7 @@ export default async function XbotPlaybookPage() {
   try {
     initialDone = parseSetupChecklist(await getXbotSettings());
   } catch (e) {
-    return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
+    return <DbError error={e} />;
   }
 
   return (

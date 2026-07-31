@@ -1,3 +1,4 @@
+import DbError from "@/components/DbError";
 import { desc, eq, inArray } from "drizzle-orm";
 import { db, xbotDrafts, xbotTweets } from "@/lib/db";
 import XbotDraftCard from "@/components/XbotDraftCard";
@@ -10,7 +11,7 @@ export default async function XbotQueuePage() {
   try {
     rows = await load();
   } catch (e) {
-    return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
+    return <DbError error={e} />;
   }
 
   return (

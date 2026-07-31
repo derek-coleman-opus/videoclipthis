@@ -1,3 +1,4 @@
+import DbError from "@/components/DbError";
 import { desc, eq, inArray, ne } from "drizzle-orm";
 import { db, clips, candidates, clipPublishes, type ClipPublish } from "@/lib/db";
 import { platformLabel } from "@/lib/pipeline/crosspost";
@@ -12,7 +13,7 @@ export default async function PostsPage() {
     rows = await load();
     publishes = await loadPublishes(rows.map((r) => r.id));
   } catch (e) {
-    return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
+    return <DbError error={e} />;
   }
 
   return (

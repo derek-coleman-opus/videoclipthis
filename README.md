@@ -45,7 +45,13 @@ npm run pipeline    # scout, then summon, then feedback (the full cycle)
 2. Add a Postgres store (Vercel Postgres/Neon) → it sets `DATABASE_URL`.
 3. Set env vars: `ADMIN_PASSWORD`, `CRON_SECRET` (any random string), plus all the service keys below.
 4. Run `npm run db:push` against the Neon URL (locally or via a one-off) to create tables.
-5. Deploy. `vercel.json` runs **scout** every 30 min, **summon** every 5 min, **feedback** hourly, **xbot-inbound** every 30 min (engage-backs), and **xbot-outbound** every 2 h (replies to your target roster's fresh posts), with `maxDuration=300` on the pipeline routes (requires **Vercel Pro** — Hobby caps crons at daily and functions at 60s). The site root is the public showcase; the admin lives at `/dashboard` (basic-auth protected). Keep autonomy on `review` until the clip quality is proven, then switch to `auto` in Settings.
+5. Deploy. `vercel.json` runs **scout** every 30 min, **summon** every 15 min, **feedback** hourly, **xbot-inbound** every 30 min (engage-backs), and **xbot-outbound** every 2 h (replies to your target roster's fresh posts), with `maxDuration=300` on the pipeline routes (requires **Vercel Pro** — Hobby caps crons at daily and functions at 60s). The site root is the public showcase; the admin lives at `/dashboard` (basic-auth protected). Keep autonomy on `review` until the clip quality is proven, then switch to `auto` in Settings.
+
+   > **Cron cadence drives your Neon bill.** Neon autosuspends compute after ~5 min idle, so *any*
+   > cron running every 5 minutes keeps the database awake 24/7 and burns the plan's compute-time
+   > allowance — which surfaces as `HTTP 402 … exceeded the compute time quota` on every admin page.
+   > Keeping every schedule at 15 min or longer lets the compute sleep between runs. Tightening
+   > `summon` back to `*/5` buys faster @-mention replies at that cost.
 
 ## Going live
 

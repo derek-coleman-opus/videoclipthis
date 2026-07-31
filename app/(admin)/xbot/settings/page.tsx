@@ -1,3 +1,4 @@
+import DbError from "@/components/DbError";
 import { getXbotSettings } from "@/lib/xbot/settings";
 import XbotSettingsForm from "@/components/XbotSettingsForm";
 
@@ -8,7 +9,7 @@ export default async function XbotSettingsPage() {
   try {
     s = await getXbotSettings();
   } catch (e) {
-    return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
+    return <DbError error={e} />;
   }
 
   return (

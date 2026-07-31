@@ -1,3 +1,4 @@
+import DbError from "@/components/DbError";
 import { sql } from "drizzle-orm";
 import { db, candidates } from "@/lib/db";
 import { getFigureRows } from "@/lib/figures-store";
@@ -24,7 +25,7 @@ export default async function FiguresPage() {
       clipped: counts[r.name] ?? 0,
     }));
   } catch (e) {
-    return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
+    return <DbError error={e} />;
   }
 
   return (

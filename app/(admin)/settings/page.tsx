@@ -1,3 +1,4 @@
+import DbError from "@/components/DbError";
 import { getSettings } from "@/lib/settings";
 import SettingsForm from "@/components/SettingsForm";
 import CrosspostAccounts from "@/components/CrosspostAccounts";
@@ -9,7 +10,7 @@ export default async function SettingsPage() {
   try {
     cfg = await getSettings();
   } catch (e) {
-    return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
+    return <DbError error={e} />;
   }
 
   return (

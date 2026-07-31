@@ -1,3 +1,4 @@
+import DbError from "@/components/DbError";
 import { desc, eq, inArray } from "drizzle-orm";
 import { db, candidates, clips, summonRequests } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
@@ -14,7 +15,7 @@ export default async function RepliesPage() {
   try {
     data = await load();
   } catch (e) {
-    return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
+    return <DbError error={e} />;
   }
   const { rows, poll, botUserId } = data;
 

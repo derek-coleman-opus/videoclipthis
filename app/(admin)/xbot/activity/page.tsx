@@ -1,3 +1,4 @@
+import DbError from "@/components/DbError";
 import Link from "next/link";
 import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import { db, xbotActions, xbotDrafts, xbotTweets } from "@/lib/db";
@@ -67,7 +68,7 @@ export default async function XbotActivityPage({
   try {
     data = await load(kindFilter, range);
   } catch (e) {
-    return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
+    return <DbError error={e} />;
   }
   const { summary, buckets, perDay, rows } = data;
   const total = KINDS.reduce((n, k) => n + (summary[k] ?? 0), 0);

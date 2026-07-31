@@ -1,3 +1,4 @@
+import DbError from "@/components/DbError";
 import { desc, inArray } from "drizzle-orm";
 import { db, xbotDrafts } from "@/lib/db";
 import XbotPlugButton from "@/components/XbotPlugButton";
@@ -9,7 +10,7 @@ export default async function XbotPostedPage() {
   try {
     rows = await load();
   } catch (e) {
-    return <div className="text-sm text-amber-300">Database not ready: {(e as Error).message}</div>;
+    return <DbError error={e} />;
   }
 
   return (
