@@ -45,13 +45,42 @@ npm run pipeline    # scout, then summon, then feedback (the full cycle)
 2. Add a Postgres store (Vercel Postgres/Neon) → it sets `DATABASE_URL`.
 3. Set env vars: `ADMIN_PASSWORD`, `CRON_SECRET` (any random string), plus all the service keys below.
 4. Run `npm run db:push` against the Neon URL (locally or via a one-off) to create tables.
-5. Deploy. `vercel.json` runs **scout** every 30 min, **summon** every 15 min, **feedback** hourly, **xbot-inbound** every 30 min (engage-backs), and **xbot-outbound** every 2 h (replies to your target roster's fresh posts), with `maxDuration=300` on the pipeline routes (requires **Vercel Pro** — Hobby caps crons at daily and functions at 60s). The site root is the public showcase; the admin lives at `/dashboard` (basic-auth protected). Keep autonomy on `review` until the clip quality is proven, then switch to `auto` in Settings.
+5. Deploy. `vercel.json` runs **scout** and **summon** every 30 min, **xbot-post** every 30 min, **xbot-outbound** hourly, **xbot-inbound** every 2 h (engage-backs), and **feedback** + **xbot-discover** every 6 h, with `maxDuration=300` on the pipeline routes (requires **Vercel Pro** — Hobby caps crons at daily and functions at 60s). The site root is the public showcase; the admin lives at `/dashboard` (basic-auth protected). Keep autonomy on `review` until the clip quality is proven, then switch to `auto` in Settings.
 
-   > **Cron cadence drives your Neon bill.** Neon autosuspends compute after ~5 min idle, so *any*
-   > cron running every 5 minutes keeps the database awake 24/7 and burns the plan's compute-time
-   > allowance — which surfaces as `HTTP 402 … exceeded the compute time quota` on every admin page.
-   > Keeping every schedule at 15 min or longer lets the compute sleep between runs. Tightening
-   > `summon` back to `*/5` buys faster @-mention replies at that cost.
+### Neon compute: read this before changing any schedule
+
+`HTTP 402 … exceeded the compute time quota` on every admin page means the Neon project burned
+its monthly compute allowance. It is the easiest way to take this whole app down, and cadence is
+only half the cause. The mechanism, in order of how much it costs you:
+
+1. **Compute SIZE multiplies everything.** Neon bills `CU-hrs` — compute-*unit* hours, not
+   wall-clock hours. A project left autoscaling to 2 CU burns 8× what a 0.25 CU compute does for
+   the identical workload. In the Neon console: **Branch → Compute → Edit**, set min **and** max
+   to **0.25 CU**. This workload never needs more, and it is the single biggest lever. (A real
+   incident: 110 CU-hrs against a 100 CU-hr plan in 63 hours — ~1.75 CU running continuously.)
+2. **Autosuspend delay is billed idle time.** The default is 5 minutes, and it restarts on every
+   query. Set it to **60 seconds** (Branch → Compute → Edit). At 48 wake-ups a day that is ~3 h/day
+   of pure idle billing recovered.
+3. **Wake-up COUNT matters more than query count.** Each wake costs `run duration + autosuspend
+   delay`, whatever the run actually did. Crons on `*/15` and `*/30` used to stagger into separate
+   wake windows at `:00 :15 :30 :45` — 96/day. Every schedule now lands on `:00` or `:30`, so the
+   crons that fire together **share one wake window**: 48/day. Keep it that way — a new cron on
+   `*/20` or `*/10` silently doubles the wake count even if it queries almost nothing.
+4. **Long routes hold the compute open.** These crons carry `maxDuration=300` and spend most of it
+   waiting on Anthropic, OpusClip, and YouTube — the DB stays awake for the whole call, not just
+   the queries. This is why a "cheap" 30-min cron is not cheap.
+
+Budget check: `plan CU-hrs ÷ 0.25` = the awake-hours you can afford per month. A 100 CU-hr plan
+buys ~400 h, or ~13 h/day. With 0.25 CU + 60 s autosuspend + 48 wakes/day the app lands near
+**12 CU-hrs/month**, leaving plenty for the admin UI.
+
+Two more things that keep it awake: every admin page is `force-dynamic`, so a dashboard tab left
+open bills compute on each load — close it when you're done. And tightening `summon` back to
+`*/15` buys faster @-mention replies at roughly double the wake count.
+
+The costs of the current cadence, so you can trade them back deliberately: summon replies take up
+to 30 min to appear (was 15), a finished render waits up to 30 min for the next scout/summon cycle
+to collect it, and view counts refresh every 6 h instead of hourly.
 
 ## Going live
 
