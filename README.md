@@ -62,6 +62,7 @@ The pipeline is wired to real services; you only need keys and the X account lab
 | `lib/pipeline/sources.ts` + `transcript.ts` | YouTube Data API ingest + caption transcripts |
 | `lib/pipeline/scoring.ts` | Claude rubric scorer |
 | `lib/pipeline/selection.ts` + `opusclip.ts` | OpusClip ClipAnything project (async create → poll clips) |
+| `lib/pipeline/editorial.ts` | The editor: picks the best of a project's renders, vetoes unshareable ones, writes the verbatim pull quote |
 | `lib/pipeline/production.ts` | Credit-first post around the OpusClip-rendered clip |
 | `lib/pipeline/publishing.ts` | X v2 post/reply with native video (needs the **Automated** label) |
 | `lib/pipeline/summon.ts` + `feedback.ts` + `xread.ts` | X mention polling + metrics/reshare reads |
@@ -78,6 +79,21 @@ The pipeline is wired to real services; you only need keys and the X account lab
 at least `MIN_CLIP_POST_GAP_MIN` (20 min) between posts. Summon replies skip the cap (a human
 asked). Failed publishes keep the rendered clip and show a **Retry post** button on `/posts`.
 Cron routes fail closed: `CRON_SECRET` must be set or every cron returns 503.
+
+**The editorial gate.** Between "render finished" and "clip posted" sits `lib/pipeline/editorial.ts`.
+One Claude call compares the renders OpusClip produced for a project (you pay per minute of
+*source* video, so they're all bought and paid for), picks the best, scores it 0-100 on
+shareability, and writes the verbatim **pull quote** that becomes the post's first line. Clips
+below `EDITORIAL_MIN_SCORE` (default 65) are **never auto-posted** — they land in `/posts` for
+review with the editor's reason, so you keep the override on a render you already paid for.
+Expect it to veto roughly half: `dailyClipCap` is a ceiling, not a quota to fill. If Anthropic is
+unreachable the editor returns no opinion and the top-ranked clip posts as before — an outage must
+never silently stop the account.
+
+The post itself leads with the speaker's own words and puts the source link in an **in-thread
+follow-up** rather than the body (a link in the body costs reach; the credit-first promise only
+needs the full talk to be one tap away). Cross-posts to other platforms get the link appended
+inline, since only X penalizes it.
 
 ### Access checklist
 | Need | For | Where |

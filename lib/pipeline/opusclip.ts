@@ -108,11 +108,12 @@ export function buildCurationPrompt(ctx: CurationContext = {}): string {
   const who = ctx.speaker ? ` from ${ctx.speaker}` : "";
   const what = ctx.title ? ` of "${ctx.title}"` : "";
   return [
-    `Find the single most engaging AND informative moment${what}${who} for an audience of AI engineers and developers on X (Twitter).`,
-    `Prioritize, in order: (1) a bold or surprising claim, hot take, or strong opinion; (2) a new announcement, release, or number; (3) a live demo moment; (4) a sharp, quotable insight or framework the viewer can apply.`,
+    `Find the single most ARGUABLE moment${what}${who} for an audience of AI engineers and developers on X (Twitter).`,
+    `The bar is not "informative" — it is whether a working developer would stop scrolling and reply to it. Prioritize, in order: (1) a specific, falsifiable claim — a number, a benchmark, a named tool, a tradeoff, a prediction with a date, or an admission that something does not work; (2) a contrarian or surprising opinion that cuts against what this audience already believes; (3) a live demo or a concrete war story from real work; (4) a sharp, quotable framework.`,
+    `The moment must open on the CLAIM ITSELF. The first spoken sentence should be the strong statement, not the wind-up to it — someone scrolling with sound off reads the caption of the first 2 seconds and decides there.`,
     `The clip must be fully self-contained: it starts at the beginning of a thought and ends at its natural conclusion — never cut mid-sentence and never depend on context the viewer hasn't seen.`,
-    `The first 2-3 seconds must work as a hook for someone scrolling a feed with sound off — a strong spoken opening line, not a slow wind-up.`,
-    `Reject boring segments: skip stretches where the speaker is only reading slides, narrating a roadmap, or where nothing surprising is said. The chosen moment must stand on the strength of what is SPOKEN, not the visuals (the source is often just slides or a whiteboard).`,
+    `Reject boring segments even if they are the best available: slide reading, roadmap or feature narration, definitions of things this audience knows, agreeable consensus nobody would reply to, and motivational or futurist filler ("AI will change everything"). It is better to return a shorter, sharper moment than a well-delivered but unarguable one.`,
+    `When the source shows a concrete artifact on screen — a terminal, an editor, code, a benchmark chart, a live demo — prefer a moment where that artifact is visible; those clips carry far better than a talking head. Where the source is only slides or a whiteboard, the moment must stand entirely on what is SPOKEN.`,
     `Avoid: intros, speaker introductions, thank-yous, audience Q&A logistics, sponsor reads, and generic high-level summaries.`,
     `Format for X: vertical 9:16, with accurate burned-in captions (most viewers watch muted), 30-90 seconds long.`,
   ].join(" ");

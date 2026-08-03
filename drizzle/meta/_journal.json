@@ -134,6 +134,13 @@
       "when": 1785424458485,
       "tag": "0018_unique_frog_thor",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1785768250867,
+      "tag": "0019_editorial_gate",
+      "breakpoints": true
     }
   ]
 }
