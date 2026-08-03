@@ -79,9 +79,11 @@ export async function crossPostClip(clip: Clip, cfg?: Settings): Promise<void> {
     const apiKey = process.env.OPUSCLIP_API_KEY ?? "";
     const base = process.env.OPUSCLIP_API_BASE ?? "";
     const title = (clip.hookCaption || clip.postText).slice(0, 95);
-    // The X post text ends with handle tags + the source link — platform-neutral enough to
-    // reuse as the description everywhere (credit-first is the whole brand).
-    const description = clip.postText;
+    // The X post text is platform-neutral enough to reuse as the description everywhere
+    // (credit-first is the whole brand). The source link lives in an in-thread follow-up on X
+    // because a link in the body costs reach there — every other platform takes it inline, so
+    // append it back on rather than dropping the speaker's click-through.
+    const description = [clip.postText, clip.followUpText].filter(Boolean).join("\n\n");
 
     const results: string[] = [];
     for (const [i, account] of accounts.entries()) {

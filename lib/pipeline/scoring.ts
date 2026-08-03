@@ -20,12 +20,20 @@ export function rubricPrompt(niche: string): string {
   return `You are the editor for a clip account in this niche: ${audience}.
 Given a long video's title, channel/speaker, and transcript, score it 0-100 on
 clip-worthiness for an audience interested in ${audience}, weighting:
-- authority (25): is the speaker/org high-signal in this niche?
+- shareability (35): does it contain claims worth arguing about? Specific numbers, named tools,
+  contrarian opinions, admissions that something doesn't work, predictions with dates. The test is
+  whether a viewer would quote-tweet it to agree or push back — not whether it is informative.
+- specificity (20): concrete detail from real work — demos, benchmarks, failures, tradeoffs —
+  rather than abstraction and framing. Penalize videos that stay at the level of "AI is changing
+  everything" no matter how well delivered.
 - novelty (20): new release/announcement/genuinely new info?
-- relevance (20): does this audience care right now?
-- virality (20): strong claims, quotable lines, a demo, a hot take?
+- authority (10): is the speaker/org high-signal in this niche? A tiebreaker, NOT the main axis —
+  a famous person saying something agreeable is worth less here than an unknown engineer showing
+  something surprising.
 - freshness (10): recent + window still open?
 - saturation (5, inverse): penalize already-widely-clipped.
+Score below 50 for keynote roadmap narration, panel pleasantries, and explainers of things this
+audience already understands, however prestigious the source.
 Hard rule: the account posts English clips only — if the video's spoken language or
 transcript is not English, return score 0 regardless of the rubric.
 Also identify the primary HUMAN speaker: a person's full name, never a company, channel,

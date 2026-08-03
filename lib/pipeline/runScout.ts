@@ -21,6 +21,10 @@ import { getFigures } from "@/lib/figures-store";
 
 export { logEvent } from "./events";
 
+/** How much transcript we keep per candidate. The editor reads ~14k chars; the rest is dead
+ *  weight in a row we hold for the lifetime of the account. */
+const TRANSCRIPT_STORE_CHARS = 16000;
+
 export interface ScoutResult {
   runId: number;
   found: number;
@@ -262,6 +266,10 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
         channel: d.channel ?? "", channelXHandle: d.channelXHandle ?? "", event: d.event ?? "",
         durationS: d.durationS ?? 0, signalStrength: d.signalStrength ?? 0,
         figureName: d.figureName ?? null,
+        // Kept for the EDITOR, which runs minutes-to-hours later when the render lands and needs
+        // the speaker's actual words to quote them verbatim. Truncated to bound row size — the
+        // editor only reads the first ~14k anyway.
+        transcript: (d.transcript ?? "").slice(0, TRANSCRIPT_STORE_CHARS),
         status: "found",
       }).onConflictDoNothing().returning();
       if (!inserted.length) { skipped++; continue; } // already known — the DB rejected the duplicate

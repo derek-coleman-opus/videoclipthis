@@ -108,6 +108,16 @@ const STATEMENTS: string[] = [
   // non-summon rows because summon stores the target URL in video_id and dedups by mention id.
   `CREATE UNIQUE INDEX IF NOT EXISTS "candidates_video_id_uniq"
      ON "candidates" ("video_id") WHERE "source" <> 'summon'`,
+  // The editorial gate (0019): the editor judges a finished render before it posts, writes the
+  // verbatim pull quote used as the hook, and the source link moves to an in-thread follow-up.
+  // candidates.transcript is what makes the quote possible — the editor runs when the render
+  // lands, long after discovery, so the speaker's words have to be persisted.
+  `ALTER TABLE "candidates" ADD COLUMN IF NOT EXISTS "transcript" text DEFAULT ''`,
+  `ALTER TABLE "clips" ADD COLUMN IF NOT EXISTS "follow_up_text" text DEFAULT ''`,
+  `ALTER TABLE "clips" ADD COLUMN IF NOT EXISTS "pull_quote" text DEFAULT ''`,
+  // NULL editorial_score = the editor did not run; that reads as "no opinion", never a rejection.
+  `ALTER TABLE "clips" ADD COLUMN IF NOT EXISTS "editorial_score" integer`,
+  `ALTER TABLE "clips" ADD COLUMN IF NOT EXISTS "editorial_note" text DEFAULT ''`,
 ];
 
 export async function GET() {

@@ -22,6 +22,10 @@ export const candidates = pgTable("candidates", {
   detectedAt: ts("detected_at").defaultNow(),        // starts the first-to-clip clock
   signalStrength: real("signal_strength").default(0),
   figureName: text("figure_name"),                   // matched tracked AI figure, if any
+  // Source transcript, kept so the EDITOR (lib/pipeline/editorial.ts) can quote the speaker
+  // verbatim when the render lands — minutes to hours after discovery, in a different process.
+  // Truncated on write; "" when the video has no captions.
+  transcript: text("transcript").default(""),
   opusProjectId: text("opus_project_id"),            // OpusClip project rendering this candidate's clips
   renderStartedAt: ts("render_started_at"),          // when the render was SUBMITTED (timeout clock)
   submitAttempts: integer("submit_attempts").notNull().default(0), // paid create attempts (see MAX_SUBMIT_ATTEMPTS)
@@ -50,6 +54,10 @@ export const clips = pgTable("clips", {
   endS: real("end_s").default(0),
   hookCaption: text("hook_caption").default(""),
   postText: text("post_text").notNull(),
+  followUpText: text("follow_up_text").default(""),   // in-thread reply carrying the source link
+  pullQuote: text("pull_quote").default(""),          // verbatim line used as the post's hook
+  editorialScore: integer("editorial_score"),         // 0-100 shareability (editorial.ts); null = editor didn't run
+  editorialNote: text("editorial_note").default(""),  // why it passed or was rejected
   clipUrl: text("clip_url").default(""),
   opusClipId: text("opus_clip_id"),                   // OpusClip clip id (needed for social post-tasks)
   xPostId: text("x_post_id"),
@@ -57,6 +65,8 @@ export const clips = pgTable("clips", {
   kind: text("kind").notNull().default("scout"),      // scout | summon
   status: text("status").notNull().default("pending_review"),
       // pending_review | approved (ready, waiting for a paced posting slot) | posted | rejected | failed
+      // A clip the EDITOR vetoed lands in pending_review (never auto-posted) rather than
+      // rejected — the render is already paid for, so the operator keeps the override.
   failReason: text("fail_reason").default(""),         // why the last publish attempt failed (retriable)
   views: integer("views").default(0),
   resharedBySpeaker: boolean("reshared_by_speaker").default(false),

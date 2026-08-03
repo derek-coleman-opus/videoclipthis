@@ -50,6 +50,7 @@ export async function POST(req: NextRequest) {
         postText,
         costUsd: clip.costUsd ?? 0,
         durationS: Math.max(0, Math.round((clip.endS ?? 0) - (clip.startS ?? 0))),
+        followUpText: clip.followUpText ?? "",
       },
       clip.replyTo ?? null,
     );

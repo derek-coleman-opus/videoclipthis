@@ -2,6 +2,7 @@ import DbError from "@/components/DbError";
 import { desc, eq, inArray, ne } from "drizzle-orm";
 import { db, clips, candidates, clipPublishes, type ClipPublish } from "@/lib/db";
 import { platformLabel } from "@/lib/pipeline/crosspost";
+import { EDITORIAL_MIN_SCORE } from "@/lib/pipeline/editorial";
 import ClipActions from "@/components/ClipActions";
 
 export const dynamic = "force-dynamic";
@@ -44,6 +45,27 @@ export default async function PostsPage() {
                 </span>
               )}
               <span className="text-neutral-500">{c.kind}</span>
+              {/* The editor's verdict (lib/pipeline/editorial.ts). A veto parks the clip here
+                  instead of posting it — so the score and the reason have to be visible, or the
+                  queue just looks mysteriously full. */}
+              {typeof c.editorialScore === "number" && (
+                <span
+                  title={c.editorialNote ?? ""}
+                  className={`rounded px-2 py-0.5 ${
+                    c.editorialScore >= EDITORIAL_MIN_SCORE
+                      ? "bg-emerald-900/60 text-emerald-300"
+                      : "bg-orange-900/60 text-orange-300"
+                  }`}
+                >
+                  editor {c.editorialScore}
+                  {c.editorialScore < EDITORIAL_MIN_SCORE ? " · vetoed" : ""}
+                </span>
+              )}
+              {c.editorialNote && (
+                <span className="max-w-md truncate text-neutral-500" title={c.editorialNote}>
+                  {c.editorialNote}
+                </span>
+              )}
               {c.resharedBySpeaker && <span className="text-green-400">↻ reshared by speaker</span>}
               {/* Cross-post fan-out: one badge per platform this clip was pushed to. */}
               {(publishes.get(c.id) ?? []).map((p) => (
@@ -128,6 +150,8 @@ async function load() {
       kind: clips.kind,
       postText: clips.postText,
       failReason: clips.failReason,
+      editorialScore: clips.editorialScore,
+      editorialNote: clips.editorialNote,
       clipUrl: clips.clipUrl,
       resharedBySpeaker: clips.resharedBySpeaker,
       views: clips.views,

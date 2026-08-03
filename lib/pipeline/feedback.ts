@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { db, candidates, clips, events } from "@/lib/db";
 import { requireXReadEnv } from "./env";
 import { fetchPublicMetrics, didHandleReshare } from "./xread";
@@ -57,6 +57,27 @@ export async function runFeedback(): Promise<FeedbackResult> {
     }
   }
   return { updated, newReshares };
+}
+
+/** Close the loop the account was missing: `clips.views` was written on every cycle and read by
+ *  nothing. These are the pull quotes from the best-performing posts, handed to the editor
+ *  (editorial.ts) as calibration so "what worked here before" shapes what ships next.
+ *
+ *  Reshared clips outrank raw view counts — a reshare by the speaker is the signal the whole
+ *  credit-first model is built to earn. Cheap enough to call per collect cycle. */
+export async function topPullQuotes(limit = 5): Promise<string[]> {
+  try {
+    const rows = await db()
+      .select({ quote: clips.pullQuote, views: clips.views, reshared: clips.resharedBySpeaker })
+      .from(clips)
+      .where(and(eq(clips.status, "posted"), isNotNull(clips.pullQuote)))
+      .orderBy(desc(clips.resharedBySpeaker), desc(clips.views))
+      .limit(limit);
+    return rows.map((r) => (r.quote ?? "").trim()).filter(Boolean);
+  } catch {
+    // Calibration is a nice-to-have; never let it break a collect cycle.
+    return [];
+  }
 }
 
 /** Feed performance back into ranking: speakers whose clips were reshared earn a small score boost. */

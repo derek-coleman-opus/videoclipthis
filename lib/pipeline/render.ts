@@ -6,6 +6,10 @@
 // clip ROWS FIRST (so a publish failure can never lose a paid render), and publishing happens in
 // a separate drain step that paces auto-posts (daily cap + minimum gap) so the account never
 // bursts. Summon replies skip the cap/pacing — a human asked.
+//
+// Between "render finished" and "clip row" sits the EDITOR (./editorial.ts): it compares the
+// project's renders, picks the best, writes the pull quote, and vetoes clips too boring to post.
+// A vetoed clip is queued for review, never deleted — the render is already paid for.
 
 import { and, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
 import { db, candidates, clips, summonRequests, type Candidate, type Clip, type Settings } from "@/lib/db";
@@ -14,7 +18,11 @@ import { MIN_CLIP_POST_GAP_MIN } from "./config";
 import { opusclipFetchClips, type OpusClipResult } from "./opusclip";
 import { crossPostClip } from "./crosspost";
 import { screenClipForAutoPost } from "./clipSafety";
-import { composePost, composeSummonReply } from "./production";
+import {
+  EDITORIAL_MAX_OPTIONS, EDITORIAL_MIN_SCORE, editorialPasses, reviewClips,
+} from "./editorial";
+import { topPullQuotes } from "./feedback";
+import { composePost, composeSummonReply, followUpText } from "./production";
 import { xPublisher } from "./publishing";
 import { hasXEnv } from "./env";
 import { logEvent } from "./events";
@@ -127,17 +135,51 @@ export async function collectRenders(): Promise<CollectResult> {
       continue;
     }
 
-    const moment = toMoment(clipsReady[0]);
+    // THE EDITOR. One Claude call compares the top renders, picks the best, scores its
+    // shareability, and writes the verbatim pull quote used as the hook. We pay OpusClip per
+    // minute of SOURCE video, so every clip in the project is already bought — judging three
+    // instead of blindly taking clipsReady[0] costs one prompt and rescues the cases where the
+    // highest retention score is the least interesting thing said.
+    const verdict = await reviewClips({
+      title: row.title,
+      speaker: row.speaker ?? undefined,
+      channel: row.channel ?? undefined,
+      transcript: row.transcript ?? undefined,
+      niche: cfg.niche ?? "",
+      winners: await topPullQuotes(),
+      options: clipsReady.slice(0, EDITORIAL_MAX_OPTIONS).map((c) => ({
+        caption: c.caption,
+        durationS: Math.max(0, c.endS - c.startS),
+        hookScore: c.score,
+      })),
+    });
+    const chosen = clipsReady[verdict?.pick ?? 0] ?? clipsReady[0];
+    const moment = toMoment(chosen);
     const d = toDetected(row);
     // Summon clips are in-thread comments (credit the video author, no link back);
-    // scout clips are standalone credit-first posts.
-    const postText = row.source === "summon" ? composeSummonReply(d, moment) : composePost(d, moment);
+    // scout clips are standalone credit-first posts with the source link in a follow-up.
+    const isSummonRow = row.source === "summon";
+    const postText = isSummonRow
+      ? composeSummonReply(d, moment, verdict)
+      : composePost(d, moment, verdict);
+    const followUp = isSummonRow ? "" : followUpText(d);
 
     // Summon candidates reply in-thread (always auto); scout clips obey the autonomy gate.
-    const summonReq = row.source === "summon"
+    const summonReq = isSummonRow
       ? (await database.select().from(summonRequests).where(eq(summonRequests.candidateId, row.id)).limit(1))[0]
       : undefined;
-    let autoPost = row.source === "summon" || cfg.autonomy === "auto";
+    let autoPost = isSummonRow || cfg.autonomy === "auto";
+
+    // The editorial veto: a clip the editor judged unshareable is never posted unattended. It
+    // lands in the review queue rather than being discarded — the render is paid for and the
+    // operator may disagree with the editor. Summon replies are exempt: a human asked for that
+    // specific video, and "nothing here was interesting enough" is not an acceptable answer to a
+    // direct request.
+    let vetoNote = "";
+    if (autoPost && !isSummonRow && !editorialPasses(verdict)) {
+      autoPost = false;
+      vetoNote = `editor scored it ${verdict?.score}/${EDITORIAL_MIN_SCORE} — ${verdict?.note || "not shareable enough"}`;
+    }
 
     // Unattended posts get a final content screen (adult/violent/hate/harassment → held for a
     // human). Manual review-mode clips skip it — the human approval IS the screen.
@@ -154,19 +196,28 @@ export async function collectRenders(): Promise<CollectResult> {
     // publish failure, and there is no orphan-tweet window.
     const [clip] = await database.insert(clips).values({
       candidateId: row.id, startS: moment.startS, endS: moment.endS,
-      hookCaption: moment.hookCaption, postText, clipUrl: moment.clipUrl,
-      opusClipId: clipsReady[0].clipId || null,
-      kind: row.source === "summon" ? "summon" : "scout",
+      hookCaption: moment.hookCaption, postText, followUpText: followUp,
+      pullQuote: verdict?.pullQuote ?? "",
+      editorialScore: verdict?.score ?? null,
+      editorialNote: vetoNote || verdict?.note || "",
+      clipUrl: moment.clipUrl,
+      opusClipId: chosen.clipId || null,
+      kind: isSummonRow ? "summon" : "scout",
       status: autoPost ? "approved" : "pending_review",
       replyTo: summonReq?.tweetId ?? null, costUsd: moment.costUsd,
     }).returning();
     await database.update(candidates).set({ status: "selected" }).where(eq(candidates.id, row.id));
 
+    const picked = clipsReady.length > 1 ? ` (best of ${Math.min(clipsReady.length, EDITORIAL_MAX_OPTIONS)})` : "";
     await logEvent(
-      holdReason ? "error" : "scored",
+      holdReason || vetoNote ? "held" : "scored",
       holdReason
         ? `Clip HELD by safety screen (needs your review): ${row.title} — ${holdReason}`
-        : autoPost ? `Clip ready — queued to post: ${row.title}` : `Clip ready for review: ${row.title}`,
+        : vetoNote
+          ? `Clip VETOED by the editor (in review, yours to override): ${row.title} — ${vetoNote}`
+          : autoPost
+            ? `Clip ready — queued to post${picked}${verdict ? ` [editor ${verdict.score}]` : ""}: ${row.title}`
+            : `Clip ready for review${picked}: ${row.title}`,
       "clips", clip.id,
     );
     collected++;
@@ -224,6 +275,7 @@ export async function drainApprovedClips(cfg?: Settings): Promise<number> {
           postText: clip.postText,
           costUsd: clip.costUsd ?? 0,
           durationS: Math.max(0, Math.round((clip.endS ?? 0) - (clip.startS ?? 0))),
+          followUpText: clip.followUpText ?? "",
         },
         clip.replyTo ?? null,
       );

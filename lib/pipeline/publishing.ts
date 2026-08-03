@@ -1,3 +1,4 @@
+import { slog } from "./util";
 import type { ProducedClip } from "./production";
 
 export interface PublishResult {
@@ -66,6 +67,21 @@ export function xPublisher(): Publisher {
         if (mediaId) payload.media = { media_ids: [mediaId] };
         if (replyTo) payload.reply = { in_reply_to_tweet_id: replyTo };
         const res = await client.v2.tweet(payload as any);
+
+        // The source link rides in a follow-up reply instead of the post body: a URL in the body
+        // costs reach, and the credit-first promise only needs the link to be one tap away.
+        // Best-effort — the clip post is already live and counted, so a failed follow-up is
+        // logged and swallowed rather than failing (and re-queueing) a successful publish.
+        if (clip.followUpText) {
+          try {
+            await client.v2.tweet({
+              text: clip.followUpText,
+              reply: { in_reply_to_tweet_id: res.data.id },
+            } as any);
+          } catch (e) {
+            slog("followup_reply_failed", { xPostId: res.data.id, error: (e as Error).message });
+          }
+        }
         return { xPostId: res.data.id };
       } catch (e) {
         throw describeXError(e);

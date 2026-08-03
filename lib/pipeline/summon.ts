@@ -6,8 +6,9 @@ import { MAX_CONCURRENT_RENDERS } from "./config";
 import { opusclipCreateProject } from "./opusclip";
 import {
   allowedSummonUrl, fetchOEmbedMeta, fetchVideoDurationS, MIN_SUMMON_VIDEO_S,
-  screenSummonTarget, screenXVideoTarget, xStatusIdFromUrl,
+  screenSummonTarget, screenXVideoTarget, xStatusIdFromUrl, youtubeVideoId,
 } from "./clipSafety";
+import { fetchTranscript } from "./transcript";
 import { xPublisher } from "./publishing";
 import { reportHealth } from "@/lib/xbot/health";
 import { collectRenders } from "./render";
@@ -108,9 +109,16 @@ export async function runSummon(): Promise<SummonResult> {
       continue;
     }
 
+    // Grab captions if this is a YouTube target, so the editor can quote the speaker verbatim in
+    // the reply instead of echoing OpusClip's clip title. Best-effort and never blocking: an
+    // X-native video or a caption-less upload just falls back to the caption hook.
+    const ytId = youtubeVideoId(gate.url);
+    const transcript = ytId ? await fetchTranscript(ytId).catch(() => "") : "";
+
     const [cand] = await database.insert(candidates).values({
       source: "summon", url: gate.url, videoId: gate.url, title: gate.title,
       speaker: gate.speaker, speakerHandle: gate.speakerHandle ?? "",
+      transcript: transcript.slice(0, 16000),
       status: "found",
     }).returning();
     const [req] = await database.insert(summonRequests).values({
