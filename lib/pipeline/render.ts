@@ -34,7 +34,7 @@ const RENDER_TIMEOUT_H = Number(process.env.RENDER_TIMEOUT_H ?? 2);
 
 /** Pending-review clips older than this are stale — the moment has passed, so expire them
  *  (we only want to post NEW content). Env-overridable. */
-const CLIP_REVIEW_TTL_H = Number(process.env.CLIP_REVIEW_TTL_H ?? 6);
+export const CLIP_REVIEW_TTL_H = Number(process.env.CLIP_REVIEW_TTL_H ?? 6);
 
 export interface CollectResult {
   checked: number;
