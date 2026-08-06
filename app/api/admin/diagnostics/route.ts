@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { getSettings } from "@/lib/settings";
+import { MIN_CLIP_POST_GAP_MIN } from "@/lib/pipeline/config";
+import { EDITORIAL_MIN_SCORE } from "@/lib/pipeline/editorial";
+import { hasXEnv } from "@/lib/pipeline/env";
+import { CLIP_REVIEW_TTL_H } from "@/lib/pipeline/render";
 import { failingComponents, fetchXUsage, getXbotHealth } from "@/lib/xbot/health";
 import { effectiveCaps, inLockFreeze } from "@/lib/xbot/limits";
 import { getXbotSettings } from "@/lib/xbot/settings";
@@ -24,7 +29,21 @@ const REQUIRED_COLUMNS: [string, string][] = [
   ["settings", "x_bot_user_id"],
   ["settings", "figure_search_at"],
   ["candidates", "opus_project_id"],
+  ["candidates", "submit_attempts"],
+  ["candidates", "channel_x_handle"],
+  ["clips", "fail_reason"],
+  ["clips", "opus_clip_id"],
   ["xbot_tweets", "view_count"],
+  // The editorial gate (0019). candidates.transcript is the one that bites hardest: runScout
+  // inserts it OUTSIDE the per-candidate try/catch, so if it's missing the INSERT throws out of
+  // the discovery loop and the entire run dies — no scoring, no renders collected, no posts.
+  // This list went stale once already and diagnostics reported a clean schema while scout was
+  // failing on exactly these columns. Every new column in lib/db/schema.ts belongs here too.
+  ["candidates", "transcript"],
+  ["clips", "follow_up_text"],
+  ["clips", "pull_quote"],
+  ["clips", "editorial_score"],
+  ["clips", "editorial_note"],
 ];
 const REQUIRED_TABLES = ["candidates", "clips", "settings", "runs", "events", "summon_requests", "figures"];
 
@@ -57,13 +76,16 @@ export async function GET() {
     if (!process.env[k]?.trim()) problems.push(`env ${k} is not set`);
   }
 
-  // 2. Database connectivity + schema drift.
+  // 2. Database connectivity + schema drift. `haveCols` is shared with the posting-path check
+  // below, which must not query a column that doesn't exist yet.
+  const haveCols = new Set<string>();
   try {
     const cols: any = await db().execute(
       sql`SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'`,
     );
     const rows: any[] = cols.rows ?? cols;
-    const have = new Set(rows.map((r) => `${r.table_name}.${r.column_name}`));
+    for (const r of rows) haveCols.add(`${r.table_name}.${r.column_name}`);
+    const have = haveCols;
     const tables = new Set(rows.map((r) => r.table_name));
     const missingCols = REQUIRED_COLUMNS.filter(([t, c]) => !have.has(`${t}.${c}`)).map(([t, c]) => `${t}.${c}`);
     const missingTables = REQUIRED_TABLES.filter((t) => !tables.has(t));
@@ -88,6 +110,89 @@ export async function GET() {
     report.recentErrors = (errs.rows ?? errs);
   } catch {
     /* covered by the database check above */
+  }
+
+  // 3b. THE POSTING PATH — "it hasn't posted in days, why?" answered by walking every gate a
+  // clip passes through, in order, and naming the closed one. Several of these gates are silent
+  // by design (a paced or capped clip logs nothing, and a missing X token makes the drain return
+  // 0 without a word), which is exactly why they need to be reported somewhere.
+  try {
+    const cfg = await getSettings();
+    const clipCounts: any = await db().execute(
+      sql`SELECT status, count(*)::int AS n FROM clips GROUP BY status ORDER BY n DESC`,
+    );
+    const byStatus: Record<string, number> = {};
+    for (const r of (clipCounts.rows ?? clipCounts)) byStatus[String(r.status)] = Number(r.n);
+
+    const last: any = await db().execute(
+      sql`SELECT posted_at, kind FROM clips WHERE status = 'posted' AND posted_at IS NOT NULL
+          ORDER BY posted_at DESC LIMIT 1`,
+    );
+    const lastPostedAt = (last.rows ?? last)[0]?.posted_at ?? null;
+    const hoursSince = lastPostedAt
+      ? Math.round((Date.now() - new Date(lastPostedAt).getTime()) / 36e5)
+      : null;
+
+    const today: any = await db().execute(
+      sql`SELECT count(*)::int AS n FROM clips
+          WHERE status = 'posted' AND kind = 'scout' AND posted_at >= date_trunc('day', now() AT TIME ZONE 'utc')`,
+    );
+    const postedTodayScout = Number((today.rows ?? today)[0]?.n ?? 0);
+
+    const expired: any = await db().execute(
+      sql`SELECT count(*)::int AS n FROM clips WHERE status = 'expired' AND created_at >= now() - interval '48 hours'`,
+    );
+
+    // Only reachable once 0019 is applied — before that these columns don't exist.
+    let vetoed: number | null = null;
+    if (haveCols.has("clips.editorial_score")) {
+      const v: any = await db().execute(
+        sql`SELECT count(*)::int AS n FROM clips
+            WHERE editorial_score IS NOT NULL AND editorial_score < ${EDITORIAL_MIN_SCORE}
+              AND created_at >= now() - interval '48 hours'`,
+      );
+      vetoed = Number((v.rows ?? v)[0]?.n ?? 0);
+    }
+
+    report.posting = {
+      lastPostedAt, hoursSinceLastPost: hoursSince,
+      clipsByStatus: byStatus,
+      postedTodayScout, dailyClipCap: cfg.dailyClipCap,
+      minGapMinutes: MIN_CLIP_POST_GAP_MIN,
+      paused: cfg.paused, autonomy: cfg.autonomy,
+      xPostingConfigured: hasXEnv(),
+      cronSecretSet: Boolean(process.env.CRON_SECRET?.trim()),
+      reviewTtlHours: CLIP_REVIEW_TTL_H,
+      editorialMinScore: EDITORIAL_MIN_SCORE,
+      vetoedLast48h: vetoed,
+      expiredLast48h: Number((expired.rows ?? expired)[0]?.n ?? 0),
+    };
+
+    // Gates that produce ZERO posts, in the order a clip meets them.
+    if (cfg.paused) {
+      problems.push("settings.paused is ON — Scout skips every run, so nothing new is ever clipped or posted");
+    }
+    if (!process.env.CRON_SECRET?.trim()) {
+      problems.push("CRON_SECRET is not set — every /api/cron/* route returns 503, so nothing runs unattended (manual 'Run Scout now' still works)");
+    }
+    if (!hasXEnv()) {
+      problems.push("X posting tokens are missing (X_API_KEY/X_API_SECRET/X_ACCESS_TOKEN/X_ACCESS_SECRET) — clips render and queue as 'approved' but the drain returns silently without posting");
+    }
+    if (cfg.autonomy !== "auto") {
+      problems.push(`autonomy is "${cfg.autonomy}", not "auto" — every clip parks in pending_review and is DISCARDED after ${CLIP_REVIEW_TTL_H}h if nobody approves it. Switch to auto in Settings, or approve clips within the TTL`);
+    }
+    if ((byStatus.approved ?? 0) > 0 && hoursSince !== null && hoursSince > 24) {
+      problems.push(`${byStatus.approved} clip(s) stuck in 'approved' (ready to post) but nothing has posted for ${hoursSince}h — the publish step is failing; check clips.fail_reason and recentErrors`);
+    }
+    if ((byStatus.failed ?? 0) > 0) {
+      problems.push(`${byStatus.failed} clip(s) in 'failed' — paid renders whose publish errored. Retry them from /posts`);
+    }
+    if (vetoed !== null && vetoed > 0 && postedTodayScout === 0) {
+      problems.push(`the editor vetoed ${vetoed} clip(s) in the last 48h and nothing posted today — EDITORIAL_MIN_SCORE=${EDITORIAL_MIN_SCORE} may be set too high for your sources`);
+    }
+  } catch (e) {
+    report.posting = { error: (e as Error).message };
+    problems.push(`posting-path check failed: ${(e as Error).message}`);
   }
 
   // 4. Live OpusClip key/quota check.
