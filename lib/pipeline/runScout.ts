@@ -11,7 +11,9 @@ import { slog } from "./util";
 import { buildSources } from "./sources";
 import { claudeScorer } from "./scoring";
 import { resolveXHandle } from "./handleResolver";
-import { createProvablyNotBilled, opusclipCreateProject, opusclipUsage } from "./opusclip";
+import {
+  createProvablyNotBilled, isAccountCreditError, opusclipCreateProject, opusclipUsage,
+} from "./opusclip";
 import { needsCreditResolution } from "./production";
 import { collectRenders } from "./render";
 import { matchFigure } from "./figures";
@@ -137,6 +139,11 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
 
   // Plan-level floor: don't start a render that could push the account past its monthly credits.
   // Best-effort — an unreachable or unrecognized usage response must never stall the pipeline.
+  //
+  // This reads the API RATE CAP, which is not the meter that bills a render: an account can be
+  // far above this floor and still have every submit answered 402 InsufficientCreditError. So this
+  // gate passing means nothing about whether renders will succeed — that case is caught at submit
+  // time by isAccountCreditError() below, which is the only place it is visible.
   if (slots > 0) {
     try {
       const usage = await opusclipUsage(opusKey, opusBase);
@@ -153,6 +160,10 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
     threshold, collected: collect.collected, inFlight, slots,
     rendersToday, dailySubmitCap, sourceMinutesToday: Math.round(sourceMinutesToday),
   });
+
+  // Set once OpusClip refuses a render for insufficient credit, so the run reports it a single
+  // time instead of once per candidate it goes on to try.
+  let creditWallHit = false;
 
   /** Submit one candidate's render; consumes a slot on success.
    *
@@ -190,6 +201,37 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       rendering++; slots--; sourceMinutesToday += minutes;
       await logEvent("rendering", `Rendering [${c.score ?? "?"}]: ${c.title} (OpusClip ${projectId})`, "candidates", c.id);
     } catch (e) {
+      // An exhausted ACCOUNT budget is not this candidate's fault, so it must not consume one of
+      // its attempts. Counting it burned the whole backlog: three runs of a billing lapse pushed
+      // every waiting candidate to `failed`, and the drain above only picks up rows under
+      // MAX_SUBMIT_ATTEMPTS — so they were excluded permanently, for a condition the operator had
+      // not even been told about. Roll the attempt back and leave the row queued for a later run.
+      //
+      // The run CONTINUES rather than halting, because the refusal is length-dependent ("not
+      // enough credits to cover your video length … or shorten your video"): a balance too small
+      // for a two-hour talk may still cover a twenty-minute one, and the backlog is ordered by
+      // score, not duration. Since no attempt is consumed and nothing is billed, the only cost of
+      // trying the next candidate is one rejected POST. Reported once per run, not once per
+      // candidate — one event is enough for diagnostics to raise the flag.
+      if (isAccountCreditError(e)) {
+        await database.update(candidates)
+          .set({ status: "scored", submitAttempts: c.submitAttempts ?? 0 })
+          .where(eq(candidates.id, c.id));
+        queued++;
+        if (!creditWallHit) {
+          creditWallHit = true;
+          // The "Render submit failed" prefix is load-bearing: /api/admin/diagnostics counts
+          // these by prefix to report render trouble. Keep it if you reword the rest.
+          await logEvent("error",
+            `Render submit failed — OpusClip refused it for insufficient account credit. Keeping `
+            + `this candidate queued (no attempt consumed); shorter sources may still render. Note `
+            + `the API cap (/api/admin/diagnostics → opusclip) is a DIFFERENT meter and can still `
+            + `read healthy — check the plan's remaining hours in the OpusClip dashboard: `
+            + `${(e as Error).message}`,
+            "candidates", c.id);
+        }
+        return;
+      }
       // Only re-submit when the failure PROVES nothing was created. A timeout or 5xx may have left
       // a billed project behind whose id we never saw — retrying that would pay twice, so it is
       // terminal and surfaced for the operator instead.
