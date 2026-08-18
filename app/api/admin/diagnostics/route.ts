@@ -108,6 +108,48 @@ export async function GET() {
       sql`SELECT message, created_at FROM events WHERE type = 'error' ORDER BY created_at DESC LIMIT 8`,
     );
     report.recentErrors = (errs.rows ?? errs);
+
+    // Render-submit failures need their own line in `problems`. The live OpusClip check below
+    // reads GET /api/api-usage — the API RATE CAP, which is NOT the meter that bills a render.
+    // The cap reported 89,722 credits remaining while every submit was answered 402
+    // InsufficientCreditError, so `opusclip.ok: true` is not evidence that renders work. Before
+    // this, those 402s appeared only in recentErrors: the verdict read clean through three days
+    // of a pipeline that had rendered nothing at all.
+    //
+    // Matched on the "Render submit failed" message prefix that every submit-failure path in
+    // runScout.ts emits — including the credit-wall branch, which keeps the prefix for this query.
+    const submitFails: any = await db().execute(
+      sql`SELECT
+            count(*)::int AS n,
+            count(*) FILTER (WHERE message ILIKE '%402%' OR message ILIKE '%InsufficientCredit%')::int AS credit_n,
+            max(created_at) AS latest
+          FROM events
+          WHERE type = 'error'
+            AND message LIKE 'Render submit failed%'
+            AND created_at > now() - interval '24 hours'`,
+    );
+    const sf = (submitFails.rows ?? submitFails)[0] ?? {};
+    const submitFailures24h = Number(sf.n ?? 0);
+    const creditFailures24h = Number(sf.credit_n ?? 0);
+    report.renderSubmit = {
+      failures24h: submitFailures24h,
+      creditFailures24h,
+      lastFailureAt: sf.latest ?? null,
+    };
+    if (creditFailures24h > 0) {
+      problems.push(
+        `${creditFailures24h} render submit(s) refused in the last 24h for INSUFFICIENT OPUSCLIP CREDIT `
+        + `— no new clips are being produced, so nothing can post no matter how healthy the rest of `
+        + `the pipeline looks. Check the plan's remaining hours in the OpusClip dashboard; the `
+        + `"opusclip" block below reads the API rate cap, which is a different meter and stays green `
+        + `through this`,
+      );
+    } else if (submitFailures24h > 0) {
+      problems.push(
+        `${submitFailures24h} render submit(s) failed in the last 24h — no new clips are being `
+        + `produced; see recentErrors for the reason`,
+      );
+    }
   } catch {
     /* covered by the database check above */
   }
@@ -195,13 +237,20 @@ export async function GET() {
     problems.push(`posting-path check failed: ${(e as Error).message}`);
   }
 
-  // 4. Live OpusClip key/quota check.
+  // 4. Live OpusClip key/quota check. This proves the KEY works and reports the API rate cap.
+  // It does NOT report the plan's render balance — the two are separate meters, and only the
+  // renderSubmit counters above can tell you renders are actually being accepted. Labelled in the
+  // response so nobody reads a healthy `remaining` as "renders are fine" again.
   if (process.env.OPUSCLIP_API_KEY) {
     const base = (process.env.OPUSCLIP_API_BASE ?? "https://api.opus.pro").replace(/\/$/, "");
     const r = await timed(() => fetch(`${base}/api/api-usage?q=mine`, {
       headers: { authorization: `Bearer ${process.env.OPUSCLIP_API_KEY}`, accept: "application/json" },
     }));
-    report.opusclip = r;
+    report.opusclip = {
+      ...r,
+      meter: "API rate cap only — NOT the plan's render balance. Submits can fail 402 "
+        + "InsufficientCreditError while this reads healthy; see renderSubmit for the truth.",
+    };
     if (!r.ok) problems.push(`OpusClip API: HTTP ${r.status} ${r.detail}`);
   }
 

@@ -54,7 +54,11 @@ export const MAX_SUBMIT_ATTEMPTS = Number(process.env.MAX_SUBMIT_ATTEMPTS ?? 3);
 
 /** Refuse to submit when the OpusClip plan has fewer than this many monthly credits left, so a
  *  long video can't push the account past its cap mid-render. Best-effort: skipped if the usage
- *  endpoint is unreachable or returns a shape we don't recognize. */
+ *  endpoint is unreachable or returns a shape we don't recognize.
+ *
+ *  Guards the API RATE CAP only. It cannot prevent a 402 InsufficientCreditError — that comes off
+ *  the plan's render balance, a meter no API surface exposes. Do not read this floor as a
+ *  guarantee that submits will be accepted. */
 export const MIN_CREDITS_REMAINING = Number(process.env.MIN_CREDITS_REMAINING ?? 200);
 
 /** Auto-post pacing: minimum minutes between consecutive clip posts (scout kind). The daily

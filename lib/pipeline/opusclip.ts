@@ -161,6 +161,20 @@ export function createProvablyNotBilled(e: unknown): boolean {
   return status ? Number(status) >= 400 && Number(status) < 500 : false;
 }
 
+/** True when a create failed because the ACCOUNT is out of render budget — nothing is wrong with
+ *  this candidate, and every other submit in the run will fail identically.
+ *
+ *  OpusClip answers `402 InsufficientCreditError` ("not enough credits to cover your video
+ *  length … purchase more hours"). This is a DIFFERENT METER from GET /api/api-usage, which
+ *  reports the API rate cap: the cap can read tens of thousands of credits remaining while the
+ *  plan's render balance is empty. That is why the pre-flight MIN_CREDITS_REMAINING gate cannot
+ *  see this coming, and why the caller must treat it as an account condition rather than a
+ *  per-candidate failure. */
+export function isAccountCreditError(e: unknown): boolean {
+  const m = (e as Error)?.message ?? String(e);
+  return /\s402:/.test(m) || /InsufficientCredit/i.test(m);
+}
+
 /** Submit a long video for clipping; returns the project id (rendering continues server-side). */
 export async function opusclipCreateProject(
   videoUrl: string,
