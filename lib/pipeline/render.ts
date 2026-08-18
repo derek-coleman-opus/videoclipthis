@@ -14,6 +14,7 @@
 import { and, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
 import { db, candidates, clips, summonRequests, type Candidate, type Clip, type Settings } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
+import { findProfile } from "./audience";
 import { MIN_CLIP_POST_GAP_MIN } from "./config";
 import { opusclipFetchClips, type OpusClipResult } from "./opusclip";
 import { crossPostClip } from "./crosspost";
@@ -89,6 +90,10 @@ function toMoment(best: OpusClipResult): Moment {
 export async function collectRenders(): Promise<CollectResult> {
   const database = db();
   const cfg = await getSettings();
+  const profile = findProfile(cfg.activeProfile);
+  // Per-profile shareability floor: the right bar differs by lane, and one floor for both starves
+  // whichever lane it was not tuned for. An explicit EDITORIAL_MIN_SCORE env still wins.
+  const minScore = process.env.EDITORIAL_MIN_SCORE ? EDITORIAL_MIN_SCORE : profile.editorialMinScore;
   const apiKey = process.env.OPUSCLIP_API_KEY ?? "";
   const base = process.env.OPUSCLIP_API_BASE ?? "";
 
@@ -146,6 +151,11 @@ export async function collectRenders(): Promise<CollectResult> {
       channel: row.channel ?? undefined,
       transcript: row.transcript ?? undefined,
       niche: cfg.niche ?? "",
+      // Clip-level rubric from the active profile, so the editor's bar matches the lane the
+      // scorer and curator were working in rather than always judging for developers.
+      editorialRubric: profile.editorialRubric,
+      editorialFloor: profile.editorialFloor,
+      guardrails: profile.guardrails,
       winners: await topPullQuotes(),
       options: clipsReady.slice(0, EDITORIAL_MAX_OPTIONS).map((c) => ({
         caption: c.caption,
@@ -176,9 +186,9 @@ export async function collectRenders(): Promise<CollectResult> {
     // specific video, and "nothing here was interesting enough" is not an acceptable answer to a
     // direct request.
     let vetoNote = "";
-    if (autoPost && !isSummonRow && !editorialPasses(verdict)) {
+    if (autoPost && !isSummonRow && !editorialPasses(verdict, minScore)) {
       autoPost = false;
-      vetoNote = `editor scored it ${verdict?.score}/${EDITORIAL_MIN_SCORE} — ${verdict?.note || "not shareable enough"}`;
+      vetoNote = `editor scored it ${verdict?.score}/${minScore} — ${verdict?.note || "not shareable enough"}`;
     }
 
     // Unattended posts get a final content screen (adult/violent/hate/harassment → held for a

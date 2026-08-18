@@ -118,6 +118,14 @@ const STATEMENTS: string[] = [
   // NULL editorial_score = the editor did not run; that reads as "no opinion", never a rejection.
   `ALTER TABLE "clips" ADD COLUMN IF NOT EXISTS "editorial_score" integer`,
   `ALTER TABLE "clips" ADD COLUMN IF NOT EXISTS "editorial_note" text DEFAULT ''`,
+  // Audience profiles (0020): one switch that moves the scorer, curator, editor AND discovery to a
+  // different reader. Defaults reproduce the pre-profile AI/developer behavior exactly, so applying
+  // this migration alone changes nothing until a profile is selected in the admin.
+  `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "active_profile" text NOT NULL DEFAULT 'ai-developer'`,
+  // Per-profile snapshot of edited fields, so switching lanes and back does not lose hand-tuned
+  // topics or channels. JSON keyed by profile key; '{}' means "no profile has been customized".
+  `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "profile_overrides" text NOT NULL DEFAULT '{}'`,
+  `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "curation_brief" text NOT NULL DEFAULT ''`,
 ];
 
 export async function GET() {

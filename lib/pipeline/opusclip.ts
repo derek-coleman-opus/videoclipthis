@@ -16,6 +16,7 @@
 // RENDER_SUBMIT_MULTIPLIER, MAX_CLIPS_PER_RUN) plus the credit floor checked via opusclipUsage().
 
 import { withRetry } from "./util";
+import { AI_DEVELOPER } from "./audience";
 
 export interface OpusClipResult {
   clipId: string;  // OpusClip's clip id — required for social post-tasks
@@ -100,23 +101,33 @@ export interface CurationContext {
   title?: string;
   speaker?: string;
   channel?: string;
+  /** Moment-selection instruction from the active audience profile. Defaults to the
+   *  AI/developer brief when absent, which is what callers got before profiles existed. */
+  brief?: string;
+  /** Content refusals from the active profile, injected as overriding hard rules. */
+  guardrails?: string[];
 }
 
-/** What we tell ClipAnything to look for. The output is posted as native video on X to an
- *  audience of AI/dev builders, so we optimize for a scroll-stopping, self-contained moment. */
+/** What we tell ClipAnything to look for — the single highest-leverage prompt in the pipeline.
+ *  The scorer only decides which video is worth paying for; THIS decides what people actually see.
+ *
+ *  The hunting instruction comes from the active audience profile (see ./audience.ts) so it can't
+ *  drift out of agreement with the scorer and the editor. Everything below the brief is invariant:
+ *  self-containment and the X format hold for every audience. */
 export function buildCurationPrompt(ctx: CurationContext = {}): string {
   const who = ctx.speaker ? ` from ${ctx.speaker}` : "";
   const what = ctx.title ? ` of "${ctx.title}"` : "";
+  const context = what || who ? `This is a long video${what}${who}.` : "";
   return [
-    `Find the single most ARGUABLE moment${what}${who} for an audience of AI engineers and developers on X (Twitter).`,
-    `The bar is not "informative" — it is whether a working developer would stop scrolling and reply to it. Prioritize, in order: (1) a specific, falsifiable claim — a number, a benchmark, a named tool, a tradeoff, a prediction with a date, or an admission that something does not work; (2) a contrarian or surprising opinion that cuts against what this audience already believes; (3) a live demo or a concrete war story from real work; (4) a sharp, quotable framework.`,
-    `The moment must open on the CLAIM ITSELF. The first spoken sentence should be the strong statement, not the wind-up to it — someone scrolling with sound off reads the caption of the first 2 seconds and decides there.`,
+    context,
+    (ctx.brief ?? AI_DEVELOPER.curationBrief).trim(),
+    ...(ctx.guardrails?.length
+      ? [`Hard rules that override every selection consideration above: ${ctx.guardrails.join(" ")}`]
+      : []),
     `The clip must be fully self-contained: it starts at the beginning of a thought and ends at its natural conclusion — never cut mid-sentence and never depend on context the viewer hasn't seen.`,
-    `Reject boring segments even if they are the best available: slide reading, roadmap or feature narration, definitions of things this audience knows, agreeable consensus nobody would reply to, and motivational or futurist filler ("AI will change everything"). It is better to return a shorter, sharper moment than a well-delivered but unarguable one.`,
-    `When the source shows a concrete artifact on screen — a terminal, an editor, code, a benchmark chart, a live demo — prefer a moment where that artifact is visible; those clips carry far better than a talking head. Where the source is only slides or a whiteboard, the moment must stand entirely on what is SPOKEN.`,
     `Avoid: intros, speaker introductions, thank-yous, audience Q&A logistics, sponsor reads, and generic high-level summaries.`,
     `Format for X: vertical 9:16, with accurate burned-in captions (most viewers watch muted), 30-90 seconds long.`,
-  ].join(" ");
+  ].filter(Boolean).join(" ");
 }
 
 /** The exact POST /api/clip-projects body. Field shapes verified against OpusClip's own CLI
