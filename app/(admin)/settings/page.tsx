@@ -2,6 +2,7 @@ import DbError from "@/components/DbError";
 import { getSettings } from "@/lib/settings";
 import SettingsForm from "@/components/SettingsForm";
 import CrosspostAccounts from "@/components/CrosspostAccounts";
+import { DEFAULT_PROFILE_KEY, PROFILES } from "@/lib/pipeline/audience";
 
 export const dynamic = "force-dynamic";
 
@@ -17,13 +18,22 @@ export default async function SettingsPage() {
     <div>
       <h2 className="mb-4 text-sm font-medium text-neutral-400">Settings</h2>
       <SettingsForm
+        // Remount on a profile switch: the form's field state is seeded from `initial`, so without
+        // a changing key a refresh would leave the outgoing profile's topics on screen.
+        key={cfg.activeProfile ?? DEFAULT_PROFILE_KEY}
         initial={{
           paused: cfg.paused, threshold: cfg.threshold, autonomy: cfg.autonomy,
           dailyClipCap: cfg.dailyClipCap ?? 6,
           niche: cfg.niche ?? "", watchChannels: cfg.watchChannels ?? "",
           opusBrandTemplateId: cfg.opusBrandTemplateId ?? "",
           searchTopics: cfg.searchTopics ?? "",
+          activeProfile: cfg.activeProfile ?? DEFAULT_PROFILE_KEY,
+          curationBrief: cfg.curationBrief ?? "",
         }}
+        profiles={PROFILES.map((p) => ({
+          key: p.key, label: p.label,
+          topicCount: p.searchTopics.length, channelCount: p.watchChannels.length,
+        }))}
       />
       <CrosspostAccounts />
       <p className="mt-6 max-w-md text-xs leading-relaxed text-neutral-500">

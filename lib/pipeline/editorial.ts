@@ -19,6 +19,7 @@
 // editor degrades the timeline; it must never delete inventory.
 
 import { withRetry, slog } from "./util";
+import { AI_DEVELOPER, guardrailBlock } from "./audience";
 
 const EDITOR_MODEL = process.env.EDITORIAL_MODEL ?? "claude-sonnet-4-6";
 
@@ -58,10 +59,21 @@ export interface EditorialInput {
   niche?: string;
   /** Pull quotes from this account's best-performing past clips, as calibration. */
   winners?: string[];
+  /** Clip-level rubric, floor and refusals from the active audience profile. Absent → the
+   *  AI/developer defaults, which is what callers got before profiles existed. */
+  editorialRubric?: string;
+  editorialFloor?: string;
+  guardrails?: string[];
 }
 
-function systemPrompt(niche: string, winners: string[]): string {
-  const audience = niche.trim() || "AI engineers and developers";
+function systemPrompt(
+  niche: string,
+  winners: string[],
+  rubric?: string,
+  floor?: string,
+  guardrails: string[] = [],
+): string {
+  const audience = niche.trim() || AI_DEVELOPER.niche;
   const calibration = winners.length
     ? `\n\nThese hooks are from this account's best-performing past clips — match this register:\n${winners.map((w) => `- ${w}`).join("\n")}`
     : "";
@@ -69,20 +81,14 @@ function systemPrompt(niche: string, winners: string[]): string {
 because the account's problem is posting too much forgettable material, not too little.
 
 You will be given a source video's transcript and several candidate clips cut from it (by title).
-Pick the best one and score it 0-100 on SHAREABILITY — the odds a working developer stops
-scrolling, then quote-tweets it to argue or agree:
-- 40: is there a SPECIFIC claim? A number, a benchmark, a named tool, a tradeoff, a prediction with
-  a date, an admission something doesn't work. Something a reply could contradict.
-- 25: is it CONTRARIAN or surprising? Does it cut against what this audience already believes?
-- 20: is it CONCRETE? Real detail from real work, not abstraction. A demo, a failure, a war story.
-- 15: is it SELF-CONTAINED? Understandable cold, with no setup.
+Pick the best one and score it 0-100 on SHAREABILITY — the odds someone in this audience stops
+scrolling, then passes it on:
+${(rubric ?? AI_DEVELOPER.editorialRubric).trim()}
 
 Score 40 or below — which means the clip does not get posted — for any of these, no matter how
-famous the speaker is: vague futurism ("AI will change everything"), agreeable consensus that
-nobody would reply to, roadmap or feature narration, motivational filler, a definition or
-explainer of something this audience already knows, or a thought that needs the previous ten
-minutes to land. Being said by a famous person is not a reason to post it. Most clips are
-genuinely not worth posting; say so.
+famous the speaker is: ${(floor ?? AI_DEVELOPER.editorialFloor).trim()} Being said by a famous
+person is not a reason to post it. Most clips are genuinely not worth posting; say so.
+${guardrailBlock(guardrails)}
 
 Then write the PULL QUOTE: the single most arresting sentence the speaker actually says in the
 clip you picked, copied VERBATIM from the transcript. Never paraphrase, never invent, never clean
@@ -148,7 +154,10 @@ export async function reviewClips(input: EditorialInput): Promise<EditorialVerdi
         body: JSON.stringify({
           model: EDITOR_MODEL,
           max_tokens: 500,
-          system: systemPrompt(input.niche ?? "", input.winners ?? []),
+          system: systemPrompt(
+            input.niche ?? "", input.winners ?? [],
+            input.editorialRubric, input.editorialFloor, input.guardrails ?? [],
+          ),
           messages: [{ role: "user", content: user }],
         }),
       });
@@ -166,7 +175,11 @@ export async function reviewClips(input: EditorialInput): Promise<EditorialVerdi
   }
 }
 
-/** Did this verdict clear the bar? A null verdict (editor unavailable) always passes. */
-export function editorialPasses(v: EditorialVerdict | null): boolean {
-  return !v || v.score >= EDITORIAL_MIN_SCORE;
+/** Did this verdict clear the bar? A null verdict (editor unavailable) always passes.
+ *
+ *  `minScore` comes from the active audience profile — the right bar differs by lane, and a floor
+ *  tuned for one audience silently starves the other. EDITORIAL_MIN_SCORE remains the default so
+ *  the env var keeps working as an override for self-hosters. */
+export function editorialPasses(v: EditorialVerdict | null, minScore = EDITORIAL_MIN_SCORE): boolean {
+  return !v || v.score >= minScore;
 }

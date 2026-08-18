@@ -1,4 +1,5 @@
 import { withRetry } from "./util";
+import { AI_DEVELOPER, guardrailBlock } from "./audience";
 import type { DetectedCandidate } from "./types";
 
 export interface Scored {
@@ -13,28 +14,17 @@ export interface Scorer {
   score(c: DetectedCandidate): Promise<Scored>;
 }
 
-/** The niche (audience description) comes from settings, so a self-hoster can point the
- *  scorer at fitness, travel, finance… without touching code. */
-export function rubricPrompt(niche: string): string {
-  const audience = niche.trim() || "AI / developer tooling";
+/** The audience and the rubric both come from the active profile (see ./audience.ts), so the
+ *  scorer, the curator and the editor all rank for the same reader. A bare niche string is still
+ *  accepted — it falls back to the AI/developer rubric, which is what settings-only self-hosters
+ *  were getting before profiles existed. */
+export function rubricPrompt(niche: string, rubric?: string, guardrails: string[] = []): string {
+  const audience = niche.trim() || AI_DEVELOPER.niche;
   return `You are the editor for a clip account in this niche: ${audience}.
 Given a long video's title, channel/speaker, and transcript, score it 0-100 on
 clip-worthiness for an audience interested in ${audience}, weighting:
-- shareability (35): does it contain claims worth arguing about? Specific numbers, named tools,
-  contrarian opinions, admissions that something doesn't work, predictions with dates. The test is
-  whether a viewer would quote-tweet it to agree or push back — not whether it is informative.
-- specificity (20): concrete detail from real work — demos, benchmarks, failures, tradeoffs —
-  rather than abstraction and framing. Penalize videos that stay at the level of "AI is changing
-  everything" no matter how well delivered.
-- novelty (20): new release/announcement/genuinely new info?
-- authority (10): is the speaker/org high-signal in this niche? A tiebreaker, NOT the main axis —
-  a famous person saying something agreeable is worth less here than an unknown engineer showing
-  something surprising.
-- freshness (10): recent + window still open?
-- saturation (5, inverse): penalize already-widely-clipped.
-Score below 50 for keynote roadmap narration, panel pleasantries, and explainers of things this
-audience already understands, however prestigious the source.
-Hard rule: the account posts English clips only — if the video's spoken language or
+${(rubric ?? AI_DEVELOPER.rubric).trim()}
+${guardrailBlock(guardrails)}Hard rule: the account posts English clips only — if the video's spoken language or
 transcript is not English, return score 0 regardless of the rubric.
 Also identify the primary HUMAN speaker: a person's full name, never a company, channel,
 or brand (conference titles often end "— Name, Company"; the transcript's self-introduction
@@ -59,8 +49,13 @@ function parseScore(text: string): Scored {
 }
 
 /** Real scorer — Claude applies the rubric to transcript + metadata via the Messages API. */
-export function claudeScorer(apiKey: string, niche = "", model = "claude-sonnet-4-6"): Scorer {
-  const system = rubricPrompt(niche);
+export function claudeScorer(
+  apiKey: string,
+  niche = "",
+  model = "claude-sonnet-4-6",
+  opts: { rubric?: string; guardrails?: string[] } = {},
+): Scorer {
+  const system = rubricPrompt(niche, opts.rubric, opts.guardrails ?? []);
   return {
     async score(c) {
       const user = [

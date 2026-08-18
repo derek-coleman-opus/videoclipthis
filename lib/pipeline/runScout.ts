@@ -14,6 +14,7 @@ import { resolveXHandle } from "./handleResolver";
 import {
   createProvablyNotBilled, isAccountCreditError, opusclipCreateProject, opusclipUsage,
 } from "./opusclip";
+import { findProfile } from "./audience";
 import { needsCreditResolution } from "./production";
 import { collectRenders } from "./render";
 import { matchFigure } from "./figures";
@@ -48,6 +49,9 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   requireScoutEnv();
   const cfg = await getSettings();
   const database = db();
+  // The active audience profile drives the scorer, the curator, the editor AND discovery — all
+  // four have to rank for the same reader or the account produces incoherent output.
+  const profile = findProfile(cfg.activeProfile);
 
   const [run] = await database.insert(runs).values({ kind: "scout" }).returning();
 
@@ -69,18 +73,23 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   const searchDue =
     !cfg.figureSearchAt ||
     Date.now() - new Date(cfg.figureSearchAt).getTime() >= FIGURE_SEARCH_INTERVAL_H * 3600 * 1000;
-  const topicList = parseSearchTopics(cfg).length ? parseSearchTopics(cfg) : SEARCH_TOPICS;
+  // Topics and channels fall back to the ACTIVE PROFILE's lists, not the code defaults — otherwise
+  // switching to a broad-interest profile with blank settings fields would keep discovering from
+  // the AI/dev watchlist and the switch would be a no-op where it matters most.
+  const topicList = parseSearchTopics(cfg).length ? parseSearchTopics(cfg) : profile.searchTopics;
   const searchTerms = [
+    // NOTE: tracked figures (the /figures page) are NOT profile-scoped, so they are searched under
+    // every profile. Clear or replace them when switching lanes or the old lane leaks back in here.
     ...figures.map((f) => ({ term: f.name, figure: f })),
     ...topicList.map((t) => ({ term: t })),
   ];
-  const watchedChannels = parseWatchChannels(cfg).length ? parseWatchChannels(cfg) : WATCHLIST.youtubeChannels;
+  const watchedChannels = parseWatchChannels(cfg).length ? parseWatchChannels(cfg) : profile.watchChannels;
   // Channel name → its X handle, for brand tags on search-discovered videos of watched channels.
   const brandXByName = new Map(
     watchedChannels.filter((c) => c.xHandle).map((c) => [c.name.toLowerCase(), c.xHandle as string]),
   );
   const sources = buildSources(figures, {
-    channels: parseWatchChannels(cfg), // settings override → point the bot at any niche
+    channels: watchedChannels, // settings → active profile → code WATCHLIST
     search: searchDue ? { terms: searchTerms, budget: SEARCH_BUDGET_PER_BURST, offset: cfg.searchOffset ?? 0 } : null,
   });
   if (searchDue) {
@@ -89,7 +98,9 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       : 0;
     await updateSummonState({ figureSearchAt: new Date(), searchOffset: next });
   }
-  const scorer = claudeScorer(process.env.ANTHROPIC_API_KEY ?? "", cfg.niche ?? "");
+  const scorer = claudeScorer(process.env.ANTHROPIC_API_KEY ?? "", cfg.niche ?? "", undefined, {
+    rubric: profile.rubric, guardrails: profile.guardrails,
+  });
   // Handle-resolution spend cap per run (each resolution = 1-3 Claude calls + 1-3 X reads,
   // cached forever after). The cache means steady state costs ~nothing.
   let resolveBudget = Number(process.env.HANDLE_RESOLVE_PER_RUN ?? 6);
@@ -194,6 +205,10 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       await database.update(candidates).set({ submitAttempts: attempts }).where(eq(candidates.id, c.id));
       const projectId = await opusclipCreateProject(c.url, opusKey, opusBase, {
         title: c.title, speaker: c.speaker || c.figureName || undefined, channel: c.channel || undefined,
+        // What moment to cut. Without this the curator hunts the most technically arguable claim
+        // regardless of which audience the rest of the pipeline is serving.
+        brief: cfg.curationBrief?.trim() || profile.curationBrief,
+        guardrails: profile.guardrails,
       }, cfg.opusBrandTemplateId);
       await database.update(candidates)
         .set({ status: "rendering", opusProjectId: projectId, renderStartedAt: new Date() })

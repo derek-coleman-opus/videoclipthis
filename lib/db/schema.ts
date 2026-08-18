@@ -154,6 +154,12 @@ export const settings = pgTable("settings", {
   watchChannels: text("watch_channels").notNull().default(""), // "Name | handle" per line; "" → code WATCHLIST
   opusBrandTemplateId: text("opus_brand_template_id"), // OpusClip template: vertical layout + caption style
   searchTopics: text("search_topics").notNull().default(""), // topic/keyword search terms, one per line; "" → code defaults
+  // Audience profile (lib/pipeline/audience.ts): which reader the scorer, curator and editor all
+  // serve. The ACTIVE profile's values live in the columns above; `profileOverrides` snapshots each
+  // profile's edited fields so switching lanes and back never loses hand-tuned topics or channels.
+  activeProfile: text("active_profile").notNull().default("ai-developer"),
+  profileOverrides: text("profile_overrides").notNull().default("{}"), // JSON {profileKey: {niche, searchTopics, watchChannels, threshold, curationBrief}}
+  curationBrief: text("curation_brief").notNull().default(""), // moment-selection prompt; "" → active profile's default
   searchOffset: integer("search_offset").notNull().default(0), // rotation cursor into the figure+topic search list
   crosspostAccounts: text("crosspost_accounts").notNull().default("[]"), // JSON [{postAccountId, subAccountId?, platform, name}] to auto-cross-post to
   summonSinceId: text("summon_since_id"),                 // last @mention id processed (Summon poll cursor)
