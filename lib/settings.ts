@@ -1,9 +1,33 @@
 import { eq } from "drizzle-orm";
 import { db, settings, type Settings } from "@/lib/db";
+import { ensureSchema, isMissingColumnError } from "@/lib/db/ensureSchema";
 import { DEFAULT_PROFILE_KEY, findProfile } from "@/lib/pipeline/audience";
 
-/** Read the single settings row, creating it on first access. */
+/** Read the single settings row, creating it on first access.
+ *
+ *  SELF-HEALING, and this is the load-bearing part: this row is selected by explicit column list,
+ *  and every entry point calls it — both crons, every admin page, /api/run. A column present in
+ *  schema.ts but missing from the database therefore takes the WHOLE APP down, and it throws before
+ *  runScout can even insert its `runs` row, so the outage leaves no trace anywhere. That is not a
+ *  hypothetical: it happened three times, because the code deploys on merge while the migration was
+ *  a browser click the operator had to remember afterwards.
+ *
+ *  So on a missing-column error we apply the idempotent migration once and retry, instead of
+ *  handing the operator a dead deployment and a runbook. Costs nothing when the schema is current:
+ *  the heal only runs from this catch block. */
 export async function getSettings(): Promise<Settings> {
+  try {
+    return await readOrCreateSettings();
+  } catch (e) {
+    if (!isMissingColumnError(e)) throw e;
+    await ensureSchema();
+    // Retry once. If the schema is still behind, the original error surfaces from here rather than
+    // being masked by a heal that could not fix it (a missing TABLE, or no DDL permission).
+    return await readOrCreateSettings();
+  }
+}
+
+async function readOrCreateSettings(): Promise<Settings> {
   const database = db();
   const rows = await database.select().from(settings).where(eq(settings.id, 1)).limit(1);
   if (rows.length) return rows[0];

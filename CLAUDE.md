@@ -26,8 +26,23 @@ The canonical example is `scripts/xbot-schema-bootstrap.sql`.
 - The user typically has no local checkout: migrations get applied through the
   Neon console, so also provide the single-statement SQL form described above.
 - Keep migrations additive; never rewrite or reorder existing files in `drizzle/`.
-- **Every schema change MUST also be added to `app/api/admin/migrate/route.ts`**
-  (the one-click idempotent sync the operator runs from the browser) and, for
-  xbot tables, to `scripts/xbot-schema-bootstrap.sql`. A migration that exists
-  only in `drizzle/` WILL ship code that crashes production with
-  `column "..." does not exist` — this has happened; don't repeat it.
+- **Every schema change MUST be added to ALL THREE of these**, not just the first:
+  1. `app/api/admin/migrate/route.ts` — the one-click idempotent sync the
+     operator runs from the browser. Without it the column never gets created.
+  2. `REQUIRED_COLUMNS` in `app/api/admin/diagnostics/route.ts` — the drift
+     check. Without it diagnostics reports a **clean schema while the app is
+     down**, which is worse than no check at all.
+  3. `scripts/xbot-schema-bootstrap.sql` — xbot tables only.
+
+  A migration that exists only in `drizzle/` WILL ship code that crashes
+  production with `column "..." does not exist`. This has now happened **twice**
+  (0019, then 0020 — where the second one missed only the diagnostics list, so
+  the outage reported itself as healthy). Three hand-maintained copies of the
+  same schema is the real defect here; deriving `REQUIRED_COLUMNS` from
+  `schema.ts` would retire this rule instead of restating it.
+- **`settings` columns are the dangerous ones.** `getSettings()` selects that row
+  by explicit column list and every entry point calls it — both crons, every
+  admin page, `/api/run`. A missing `settings` column is not a degraded
+  pipeline, it is a dead deployment, and it throws before `runScout` inserts its
+  `runs` row, so nothing is written anywhere. The signature is **no new `runs`
+  rows after a deploy**.

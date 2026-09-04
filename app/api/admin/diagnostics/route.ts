@@ -44,6 +44,14 @@ const REQUIRED_COLUMNS: [string, string][] = [
   ["clips", "pull_quote"],
   ["clips", "editorial_score"],
   ["clips", "editorial_note"],
+  // Audience profiles (0020). These bite harder than 0019 did: getSettings() selects the settings
+  // row by explicit column list, and EVERY entry point calls it — both crons, every admin page,
+  // /api/run. A missing column here is not a degraded pipeline, it is a dead deployment, and it
+  // throws before runScout even inserts its `runs` row, so the failure leaves no trace in the
+  // database at all. The signature is: no new `runs` rows after the deploy.
+  ["settings", "active_profile"],
+  ["settings", "profile_overrides"],
+  ["settings", "curation_brief"],
 ];
 const REQUIRED_TABLES = ["candidates", "clips", "settings", "runs", "events", "summon_requests", "figures"];
 
