@@ -1,7 +1,8 @@
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import { db, candidates, clips, events, runs } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import RunButton from "@/components/RunButton";
+import RequeueButton from "@/components/RequeueButton";
 import DbError from "@/components/DbError";
 
 export const dynamic = "force-dynamic";
@@ -39,10 +40,15 @@ async function loadData() {
   const pending = Number((await d.select({ n: one }).from(clips).where(eq(clips.status, "pending_review")))[0]?.n ?? 0);
   const queued = Number((await d.select({ n: one }).from(clips).where(eq(clips.status, "approved")))[0]?.n ?? 0);
   const reshared = Number((await d.select({ n: one }).from(clips).where(eq(clips.resharedBySpeaker, true)))[0]?.n ?? 0);
+  // Candidates stranded by the 402 billing lapse: submit failed, nothing was ever billed, and the
+  // backlog drain can no longer see them because submit_attempts hit the cap. Surfaced so the
+  // recovery is a button rather than SQL the operator has to be told about.
+  const stranded = Number((await d.select({ n: one }).from(candidates)
+    .where(and(eq(candidates.status, "failed"), isNull(candidates.opusProjectId))))[0]?.n ?? 0);
   const recent = await d.select().from(events).orderBy(desc(events.createdAt)).limit(30);
   const lastRun = (await d.select().from(runs).orderBy(desc(runs.startedAt)).limit(1))[0];
   const cfg = await getSettings();
-  return { totalFound, posted, postedToday, pending, queued, reshared, recent, lastRun, cfg };
+  return { totalFound, posted, postedToday, pending, queued, reshared, stranded, recent, lastRun, cfg };
 }
 
 export default async function Dashboard() {
@@ -52,7 +58,7 @@ export default async function Dashboard() {
   } catch (e) {
     return <DbError error={e} />;
   }
-  const { totalFound, posted, postedToday, pending, queued, reshared, recent, lastRun, cfg } = data;
+  const { totalFound, posted, postedToday, pending, queued, reshared, stranded, recent, lastRun, cfg } = data;
 
   return (
     <div className="space-y-6">
@@ -63,6 +69,11 @@ export default async function Dashboard() {
         </div>
         <RunButton />
       </div>
+
+      {/* Recovery control, only rendered when something is actually stranded. Sits above the stats
+          because an empty render queue is the one condition where every number below reads normal
+          and nothing posts anyway. */}
+      <RequeueButton count={stranded} />
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <StatCard label="Posted today" value={`${postedToday} / ${cfg.dailyClipCap ?? 6}`} hint="auto-post cap" />

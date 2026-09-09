@@ -186,6 +186,25 @@ export function isMissingColumnError(e: unknown): boolean {
 // cannot turn into an ALTER storm on every request.
 let healing: Promise<void> | null = null;
 
+/** What the last heal in this process did. Vercel logs are the only other record of an automatic
+ *  heal, and nobody reads those until they already suspect a problem — so diagnostics reports this
+ *  instead. A heal that FAILED is the case that matters: the deployment is then still down for the
+ *  same reason it was before, and the most likely cause (the DATABASE_URL role lacking ALTER) is
+ *  invisible from every other surface. */
+export interface HealAttempt {
+  at: string;
+  applied: number;
+  failed: MigrationResult[];
+}
+let lastHeal: HealAttempt | null = null;
+
+/** The last automatic heal attempt in this process, or null if none has run. Note this is
+ *  per-process: on serverless, a null here does not prove no heal ever ran, only that this
+ *  instance has not needed one. */
+export function lastHealAttempt(): HealAttempt | null {
+  return lastHeal;
+}
+
 /** Bring the database up to the code's expectations, at most once per process.
  *
  *  Called from the read path when a query fails on a missing column, so it costs nothing in the
@@ -196,9 +215,15 @@ export function ensureSchema(): Promise<void> {
     healing = (async () => {
       const results = await applyMigrations(AUTO_HEAL_STATEMENTS);
       const failed = results.filter((r) => !r.ok);
+      lastHeal = {
+        at: new Date().toISOString(),
+        applied: results.length - failed.length,
+        failed,
+      };
       // Do not throw: the caller retries its own query and surfaces the real error if the heal
       // did not help. A failing statement here is usually a permission problem, and reporting it
-      // as the app's error would bury the actual cause.
+      // as the app's error would bury the actual cause. It is recorded above so
+      // /api/admin/diagnostics can name it instead of leaving it in the Vercel logs.
       if (failed.length) {
         console.error("[ensureSchema] %d statement(s) failed", failed.length, failed.slice(0, 5));
       }

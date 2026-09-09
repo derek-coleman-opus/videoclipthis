@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { lastHealAttempt } from "@/lib/db/ensureSchema";
 import { getSettings } from "@/lib/settings";
 import { MIN_CLIP_POST_GAP_MIN } from "@/lib/pipeline/config";
 import { EDITORIAL_MIN_SCORE } from "@/lib/pipeline/editorial";
@@ -104,6 +105,22 @@ export async function GET() {
   } catch (e) {
     report.database = { connected: false, error: (e as Error).message };
     problems.push(`database: ${(e as Error).message}`);
+  }
+
+  // Did an automatic schema heal run in THIS instance, and did it work? A heal that failed leaves
+  // the deployment down for the original reason, and the likely cause — the DATABASE_URL role
+  // lacking ALTER — appears nowhere else an operator would look. Per-process, so absence proves
+  // nothing; a recorded failure proves plenty.
+  const heal = lastHealAttempt();
+  if (heal) {
+    report.schemaHeal = heal;
+    if (heal.failed.length) {
+      problems.push(
+        `the automatic schema heal FAILED (${heal.failed.length} statement(s) at ${heal.at}) — the `
+        + `app is still missing columns it needs. Most likely the DATABASE_URL role cannot ALTER; `
+        + `first error: ${heal.failed[0]?.error ?? "unknown"}`,
+      );
+    }
   }
 
   // 3. Candidate pipeline state (where do videos get stuck?) + recent errors.
