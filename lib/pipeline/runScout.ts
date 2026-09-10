@@ -12,7 +12,7 @@ import { buildSources } from "./sources";
 import { claudeScorer } from "./scoring";
 import { resolveXHandle } from "./handleResolver";
 import {
-  createProvablyNotBilled, isAccountCreditError, opusclipCreateProject, opusclipUsage,
+  accountBlockKind, accountBlockNote, createProvablyNotBilled, opusclipCreateProject, opusclipUsage,
 } from "./opusclip";
 import { findProfile } from "./audience";
 import { needsCreditResolution } from "./production";
@@ -34,6 +34,9 @@ export interface ScoutResult {
   rendering: number;
   queued: number;
   collected: number;
+  /** Clips actually posted by this run's collect phase. Present because the admin "Run Scout now"
+   *  button reports it — it read `undefined` while this field was missing. */
+  posted: number;
   skipped: number;
   paused?: boolean;
 }
@@ -60,7 +63,7 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       .set({ finishedAt: new Date(), errors: "paused" })
       .where(eq(runs.id, run.id));
     await logEvent("run", "Scout skipped — paused");
-    return { runId: run.id, found: 0, rendering: 0, queued: 0, collected: 0, skipped: 0, paused: true };
+    return { runId: run.id, found: 0, rendering: 0, queued: 0, collected: 0, posted: 0, skipped: 0, paused: true };
   }
 
   // Phase B first: collect any renders that finished since the last run (clips queue/post here).
@@ -154,7 +157,7 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   // This reads the API RATE CAP, which is not the meter that bills a render: an account can be
   // far above this floor and still have every submit answered 402 InsufficientCreditError. So this
   // gate passing means nothing about whether renders will succeed — that case is caught at submit
-  // time by isAccountCreditError() below, which is the only place it is visible.
+  // time by accountBlockKind() below, which is the only place it is visible.
   if (slots > 0) {
     try {
       const usage = await opusclipUsage(opusKey, opusBase);
@@ -228,7 +231,8 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       // score, not duration. Since no attempt is consumed and nothing is billed, the only cost of
       // trying the next candidate is one rejected POST. Reported once per run, not once per
       // candidate — one event is enough for diagnostics to raise the flag.
-      if (isAccountCreditError(e)) {
+      const block = accountBlockKind(e);
+      if (block) {
         await database.update(candidates)
           .set({ status: "scored", submitAttempts: c.submitAttempts ?? 0 })
           .where(eq(candidates.id, c.id));
@@ -238,11 +242,8 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
           // The "Render submit failed" prefix is load-bearing: /api/admin/diagnostics counts
           // these by prefix to report render trouble. Keep it if you reword the rest.
           await logEvent("error",
-            `Render submit failed — OpusClip refused it for insufficient account credit. Keeping `
-            + `this candidate queued (no attempt consumed); shorter sources may still render. Note `
-            + `the API cap (/api/admin/diagnostics → opusclip) is a DIFFERENT meter and can still `
-            + `read healthy — check the plan's remaining hours in the OpusClip dashboard: `
-            + `${(e as Error).message}`,
+            `Render submit failed — ${accountBlockNote(block)} Keeping this candidate queued with no `
+            + `attempt consumed, so the backlog survives: ${(e as Error).message}`,
             "candidates", c.id);
         }
         return;
@@ -415,5 +416,5 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
     `Scout done — found ${found}, rendering ${rendering}, queued ${queued}, collected ${collect.collected}, posted ${collect.posted}, skipped ${skipped}`);
 
   slog("scout_done", { found, rendering, queued, collected: collect.collected, skipped });
-  return { runId: run.id, found, rendering, queued, collected: collect.collected, skipped };
+  return { runId: run.id, found, rendering, queued, collected: collect.collected, posted: collect.posted, skipped };
 }

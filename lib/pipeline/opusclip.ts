@@ -172,18 +172,40 @@ export function createProvablyNotBilled(e: unknown): boolean {
   return status ? Number(status) >= 400 && Number(status) < 500 : false;
 }
 
-/** True when a create failed because the ACCOUNT is out of render budget — nothing is wrong with
- *  this candidate, and every other submit in the run will fail identically.
+/** Account- or environment-level refusals of a create: nothing about THIS CANDIDATE is wrong,
+ *  nothing was billed, and the next candidate in the run will probably hit the same wall.
  *
- *  OpusClip answers `402 InsufficientCreditError` ("not enough credits to cover your video
- *  length … purchase more hours"). This is a DIFFERENT METER from GET /api/api-usage, which
- *  reports the API rate cap: the cap can read tens of thousands of credits remaining while the
- *  plan's render balance is empty. That is why the pre-flight MIN_CREDITS_REMAINING gate cannot
- *  see this coming, and why the caller must treat it as an account condition rather than a
- *  per-candidate failure. */
-export function isAccountCreditError(e: unknown): boolean {
+ *  These must never consume a submit attempt. That is exactly how a billing lapse silently ate the
+ *  whole backlog: a 402 counted as a per-candidate retry, three runs pushed every waiting candidate
+ *  to `failed`, and the drain only selects rows under MAX_SUBMIT_ATTEMPTS — so they were excluded
+ *  permanently for a condition the operator had not been told about (see #51, #54).
+ *
+ *  - "credit": `402 InsufficientCreditError` — the account is out of render budget. Note this is a
+ *    DIFFERENT METER from GET /api/api-usage, which reports the API rate cap: the cap can read tens
+ *    of thousands of credits remaining while the plan's render balance is empty, which is why the
+ *    pre-flight MIN_CREDITS_REMAINING gate cannot see it coming.
+ *  - "proxy": `403 ProxyNotAllowedError` — OpusClip refuses datacenter egress IPs for accounts
+ *    without an active subscription. Every Vercel function egresses from a datacenter, so this is a
+ *    statement about the ACCOUNT, not about the request. It presents as intermittent because it
+ *    depends on which egress IP the instance drew, so retrying is productive — but it must not cost
+ *    the candidate its attempts. */
+export type AccountBlock = "credit" | "proxy";
+
+export function accountBlockKind(e: unknown): AccountBlock | null {
   const m = (e as Error)?.message ?? String(e);
-  return /\s402:/.test(m) || /InsufficientCredit/i.test(m);
+  if (/\s402:/.test(m) || /InsufficientCredit/i.test(m)) return "credit";
+  if (/ProxyNotAllowed/i.test(m)) return "proxy";
+  return null;
+}
+
+/** Operator-facing explanation of a block, for the event log. */
+export function accountBlockNote(kind: AccountBlock): string {
+  return kind === "credit"
+    ? "the OpusClip account is out of render budget. Note the API cap (/api/admin/diagnostics → "
+      + "opusclip) is a DIFFERENT meter and can still read healthy — check the plan's remaining hours."
+    : "OpusClip refused the request as VPN/proxy traffic (403 ProxyNotAllowedError). It blocks "
+      + "datacenter egress — which is every Vercel function — for accounts without an active "
+      + "subscription, so this is about the account, not the video.";
 }
 
 /** Submit a long video for clipping; returns the project id (rendering continues server-side). */
