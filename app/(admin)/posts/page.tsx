@@ -4,6 +4,7 @@ import { db, clips, candidates, clipPublishes, type ClipPublish } from "@/lib/db
 import { platformLabel } from "@/lib/pipeline/crosspost";
 import { EDITORIAL_MIN_SCORE } from "@/lib/pipeline/editorial";
 import ClipActions from "@/components/ClipActions";
+import { withSchemaHeal } from "@/lib/db/ensureSchema";
 
 export const dynamic = "force-dynamic";
 
@@ -143,31 +144,35 @@ export default async function PostsPage() {
 }
 
 async function load() {
-  return db()
-    .select({
-      id: clips.id,
-      status: clips.status,
-      kind: clips.kind,
-      postText: clips.postText,
-      failReason: clips.failReason,
-      editorialScore: clips.editorialScore,
-      editorialNote: clips.editorialNote,
-      clipUrl: clips.clipUrl,
-      resharedBySpeaker: clips.resharedBySpeaker,
-      views: clips.views,
-      costUsd: clips.costUsd,
-      createdAt: clips.createdAt,
-      speaker: candidates.speaker,
-      speakerHandle: candidates.speakerHandle,
-      figureName: candidates.figureName,
-      title: candidates.title,
-      sourceUrl: candidates.url,
-    })
-    .from(clips)
-    .leftJoin(candidates, eq(clips.candidateId, candidates.id))
-    .where(ne(clips.status, "expired")) // stale review clips disappear from the queue
-    .orderBy(desc(clips.createdAt))
-    .limit(100);
+  // Heal the schema on a missing column rather than showing the operator a dead page: a
+  // newly added column takes this query down until the migration is applied by hand.
+  return withSchemaHeal(async () => {
+    return db()
+      .select({
+        id: clips.id,
+        status: clips.status,
+        kind: clips.kind,
+        postText: clips.postText,
+        failReason: clips.failReason,
+        editorialScore: clips.editorialScore,
+        editorialNote: clips.editorialNote,
+        clipUrl: clips.clipUrl,
+        resharedBySpeaker: clips.resharedBySpeaker,
+        views: clips.views,
+        costUsd: clips.costUsd,
+        createdAt: clips.createdAt,
+        speaker: candidates.speaker,
+        speakerHandle: candidates.speakerHandle,
+        figureName: candidates.figureName,
+        title: candidates.title,
+        sourceUrl: candidates.url,
+      })
+      .from(clips)
+      .leftJoin(candidates, eq(clips.candidateId, candidates.id))
+      .where(ne(clips.status, "expired")) // stale review clips disappear from the queue
+      .orderBy(desc(clips.createdAt))
+      .limit(100);
+  });
 }
 
 /** Cross-post results for the listed clips, grouped by clip id. */

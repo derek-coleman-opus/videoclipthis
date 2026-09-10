@@ -201,6 +201,28 @@ export interface HealAttempt {
 }
 let lastHeal: HealAttempt | null = null;
 
+/** Run a database read or write, healing the schema once if it fails on a missing column.
+ *
+ *  Wrap every entry point that queries a table directly. The heal used to live inside
+ *  getSettings() only, on the reasoning that "every entry point calls it" — which was wrong twice
+ *  over: /found never calls it at all, and the dashboard queries `candidates` BEFORE it. So adding
+ *  candidates.forced took both pages down with `column "forced" does not exist` even though the
+ *  heal existed and would have fixed it. The trigger belongs at the query boundary, not attached
+ *  to one particular query.
+ *
+ *  Costs nothing when the schema is current: the heal only runs from the catch. */
+export async function withSchemaHeal<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (!isMissingColumnError(e)) throw e;
+    await ensureSchema();
+    // Retry once. Still failing means the heal could not fix it (a missing TABLE, or no DDL
+    // permission) — the original error surfaces rather than being masked.
+    return await fn();
+  }
+}
+
 /** The last automatic heal attempt in this process, or null if none has run. Note this is
  *  per-process: on serverless, a null here does not prove no heal ever ran, only that this
  *  instance has not needed one. */

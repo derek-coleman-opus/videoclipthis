@@ -4,6 +4,7 @@ import { db, candidates, clips, summonRequests } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import { getXbotHealth } from "@/lib/xbot/health";
 import { timeAgo } from "@/lib/timeago";
+import { withSchemaHeal } from "@/lib/db/ensureSchema";
 
 export const dynamic = "force-dynamic";
 
@@ -130,40 +131,44 @@ export default async function RepliesPage() {
 }
 
 async function load() {
-  const database = db();
-  const rows = await database
-    .select().from(summonRequests)
-    .orderBy(desc(summonRequests.createdAt)).limit(100);
+  // Heal the schema on a missing column rather than showing the operator a dead page: a
+  // newly added column takes this query down until the migration is applied by hand.
+  return withSchemaHeal(async () => {
+    const database = db();
+    const rows = await database
+      .select().from(summonRequests)
+      .orderBy(desc(summonRequests.createdAt)).limit(100);
 
-  // Join in the candidate (video title once known) + clip (pipeline state, posted reply link).
-  const candidateIds = rows.map((r) => r.candidateId).filter((id): id is number => id != null);
-  const candMap = new Map<number, { title: string }>();
-  const clipMap = new Map<number, { status: string; xPostId: string | null }>();
-  if (candidateIds.length) {
-    for (const c of await database
-      .select({ id: candidates.id, title: candidates.title })
-      .from(candidates).where(inArray(candidates.id, candidateIds))) {
-      candMap.set(c.id, { title: c.title });
+    // Join in the candidate (video title once known) + clip (pipeline state, posted reply link).
+    const candidateIds = rows.map((r) => r.candidateId).filter((id): id is number => id != null);
+    const candMap = new Map<number, { title: string }>();
+    const clipMap = new Map<number, { status: string; xPostId: string | null }>();
+    if (candidateIds.length) {
+      for (const c of await database
+        .select({ id: candidates.id, title: candidates.title })
+        .from(candidates).where(inArray(candidates.id, candidateIds))) {
+        candMap.set(c.id, { title: c.title });
+      }
+      for (const c of await database
+        .select({ candidateId: clips.candidateId, status: clips.status, xPostId: clips.xPostId })
+        .from(clips).where(inArray(clips.candidateId, candidateIds))) {
+        if (c.candidateId != null) clipMap.set(c.candidateId, { status: c.status, xPostId: c.xPostId });
+      }
     }
-    for (const c of await database
-      .select({ candidateId: clips.candidateId, status: clips.status, xPostId: clips.xPostId })
-      .from(clips).where(inArray(clips.candidateId, candidateIds))) {
-      if (c.candidateId != null) clipMap.set(c.candidateId, { status: c.status, xPostId: c.xPostId });
-    }
-  }
 
-  const health = await getXbotHealth();
-  const poll = health.find((h) => h.component === "summon") ?? null;
-  const settings = await getSettings().catch(() => null);
+    const health = await getXbotHealth();
+    const poll = health.find((h) => h.component === "summon") ?? null;
+    const settings = await getSettings().catch(() => null);
 
-  return {
-    poll,
-    botUserId: settings?.xBotUserId ?? null,
-    rows: rows.map((r) => ({
-      ...r,
-      videoTitle: r.candidateId != null ? candMap.get(r.candidateId)?.title ?? null : null,
-      clipStatus: r.candidateId != null ? clipMap.get(r.candidateId)?.status ?? null : null,
-      clipXPostId: r.candidateId != null ? clipMap.get(r.candidateId)?.xPostId ?? null : null,
-    })),
-  };
+    return {
+      poll,
+      botUserId: settings?.xBotUserId ?? null,
+      rows: rows.map((r) => ({
+        ...r,
+        videoTitle: r.candidateId != null ? candMap.get(r.candidateId)?.title ?? null : null,
+        clipStatus: r.candidateId != null ? clipMap.get(r.candidateId)?.status ?? null : null,
+        clipXPostId: r.candidateId != null ? clipMap.get(r.candidateId)?.xPostId ?? null : null,
+      })),
+    };
+  });
 }

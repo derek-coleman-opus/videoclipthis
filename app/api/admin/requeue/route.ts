@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { db, candidates } from "@/lib/db";
 import { logEvent } from "@/lib/pipeline/events";
+import { withSchemaHeal } from "@/lib/db/ensureSchema";
 
 export const dynamic = "force-dynamic";
 
@@ -19,15 +20,19 @@ const REQUEUABLE = and(eq(candidates.status, "failed"), isNull(candidates.opusPr
 
 /** How many candidates are stranded — read-only, so the admin can show a count before acting. */
 export async function GET() {
-  try {
-    const rows = await db()
-      .select({ n: sql<number>`count(*)::int` })
-      .from(candidates)
-      .where(REQUEUABLE);
-    return NextResponse.json({ ok: true, requeueable: Number(rows[0]?.n ?? 0) });
-  } catch (e) {
-    return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
-  }
+  // Heal the schema on a missing column: this route reads candidates/clips directly, so a
+  // newly added column would 500 it until the migration was applied by hand.
+  return withSchemaHeal(async () => {
+    try {
+      const rows = await db()
+        .select({ n: sql<number>`count(*)::int` })
+        .from(candidates)
+        .where(REQUEUABLE);
+      return NextResponse.json({ ok: true, requeueable: Number(rows[0]?.n ?? 0) });
+    } catch (e) {
+      return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
+    }
+  });
 }
 
 /** Put stranded candidates back in the render queue.
@@ -36,28 +41,32 @@ export async function GET() {
  *  (roughly 1 credit per minute of source video). That is why it is a deliberate POST behind a
  *  confirmation rather than part of any automatic heal. Admin basic-auth via middleware. */
 export async function POST() {
-  try {
-    const requeued = await db()
-      .update(candidates)
-      .set({ status: "scored", submitAttempts: 0 })
-      .where(REQUEUABLE)
-      .returning({ id: candidates.id });
+  // Heal the schema on a missing column: this route reads candidates/clips directly, so a
+  // newly added column would 500 it until the migration was applied by hand.
+  return withSchemaHeal(async () => {
+    try {
+      const requeued = await db()
+        .update(candidates)
+        .set({ status: "scored", submitAttempts: 0 })
+        .where(REQUEUABLE)
+        .returning({ id: candidates.id });
 
-    if (requeued.length) {
-      await logEvent(
-        "run",
-        `Requeued ${requeued.length} stranded candidate(s) for render — they will submit on the `
-        + `next Scout run and each one is a paid render.`,
-      );
+      if (requeued.length) {
+        await logEvent(
+          "run",
+          `Requeued ${requeued.length} stranded candidate(s) for render — they will submit on the `
+          + `next Scout run and each one is a paid render.`,
+        );
+      }
+      return NextResponse.json({
+        ok: true,
+        requeued: requeued.length,
+        next: requeued.length
+          ? "Hit “Run Scout now” to submit them without waiting for the next cron."
+          : "Nothing was stranded — the queue is empty for another reason.",
+      });
+    } catch (e) {
+      return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
     }
-    return NextResponse.json({
-      ok: true,
-      requeued: requeued.length,
-      next: requeued.length
-        ? "Hit “Run Scout now” to submit them without waiting for the next cron."
-        : "Nothing was stranded — the queue is empty for another reason.",
-    });
-  } catch (e) {
-    return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
-  }
+  });
 }
