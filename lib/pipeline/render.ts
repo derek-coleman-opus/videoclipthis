@@ -186,7 +186,10 @@ export async function collectRenders(): Promise<CollectResult> {
     // specific video, and "nothing here was interesting enough" is not an acceptable answer to a
     // direct request.
     let vetoNote = "";
-    if (autoPost && !isSummonRow && !editorialPasses(verdict, minScore)) {
+    // A forced candidate is exempt for the same reason summon is: the operator overrode the score
+    // gate on this specific video, so "the editor didn't like it either" would just move the veto
+    // one step later and waste the render they deliberately paid for.
+    if (autoPost && !isSummonRow && !row.forced && !editorialPasses(verdict, minScore)) {
       autoPost = false;
       vetoNote = `editor scored it ${verdict?.score}/${minScore} — ${verdict?.note || "not shareable enough"}`;
     }

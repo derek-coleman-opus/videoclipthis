@@ -53,6 +53,8 @@ const REQUIRED_COLUMNS: [string, string][] = [
   ["settings", "active_profile"],
   ["settings", "profile_overrides"],
   ["settings", "curation_brief"],
+  // Operator force-render override (0021).
+  ["candidates", "forced"],
 ];
 const REQUIRED_TABLES = ["candidates", "clips", "settings", "runs", "events", "summon_requests", "figures"];
 

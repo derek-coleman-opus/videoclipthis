@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, or, sql } from "drizzle-orm";
 import { db, candidates, runs } from "@/lib/db";
 import { getSettings, parseWatchChannels, parseSearchTopics, updateSummonState } from "@/lib/settings";
 import {
@@ -270,7 +270,9 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       .where(and(
         eq(candidates.status, "scored"),
         isNull(candidates.opusProjectId),
-        sql`${candidates.score} >= ${threshold}`,
+        // `forced` bypasses the score gate: the operator picked this video out of /found by hand,
+        // which is a direct request. Without the OR, the override would set a flag nothing reads.
+        or(sql`${candidates.score} >= ${threshold}`, eq(candidates.forced, true)),
         sql`${candidates.submitAttempts} < ${MAX_SUBMIT_ATTEMPTS}`,
       ))
       .orderBy(desc(candidates.score))

@@ -186,9 +186,17 @@ appeal depends on the viewer already knowing who is speaking.`,
     { name: "The Ramsey Show", handle: "TheRamseyShow", xHandle: "RamseyShow" },
     { name: "TED", handle: "TED", xHandle: "TEDTalks" },
   ],
-  // Higher than the dev profile: the candidate pool is an order of magnitude larger here, so the
-  // gate has to be tighter to keep spend on the few moments that actually travel.
-  threshold: 75,
+  // CALIBRATED AGAINST OBSERVED SCORES, not intuition. The first live run of this profile scored
+  // 100 candidates from these channels in a 28-52 band (Kimmel/Fallon/Ramsey/Team Coco monologue
+  // and interview uploads), so the 75 this shipped with was unreachable: every candidate was
+  // skipped and the queue stayed empty. That is what a deliberately harsh rubric does to a
+  // threshold picked for a "larger pool" — the rubric already does the rejecting, and stacking a
+  // high cut on top of it rejects everything.
+  //
+  // 50 admits roughly the top quarter of that distribution, which at a 20/day posting cap is still
+  // selective. Re-tune from the score column on /found rather than from first principles: if
+  // everything is skipped again the threshold is above the distribution, not the sources.
+  threshold: 50,
   // Lower than the dev profile: the editor's own rubric is already the harsher gate in this lane,
   // and a 65 floor on top of a ruthless scorer starved the queue.
   editorialMinScore: 60,
