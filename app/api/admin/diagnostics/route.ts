@@ -147,6 +147,7 @@ export async function GET() {
       sql`SELECT
             count(*)::int AS n,
             count(*) FILTER (WHERE message ILIKE '%402%' OR message ILIKE '%InsufficientCredit%')::int AS credit_n,
+            count(*) FILTER (WHERE message ILIKE '%ProxyNotAllowed%')::int AS proxy_n,
             max(created_at) AS latest
           FROM events
           WHERE type = 'error'
@@ -156,11 +157,22 @@ export async function GET() {
     const sf = (submitFails.rows ?? submitFails)[0] ?? {};
     const submitFailures24h = Number(sf.n ?? 0);
     const creditFailures24h = Number(sf.credit_n ?? 0);
+    const proxyFailures24h = Number(sf.proxy_n ?? 0);
     report.renderSubmit = {
       failures24h: submitFailures24h,
       creditFailures24h,
+      proxyFailures24h,
       lastFailureAt: sf.latest ?? null,
     };
+    if (proxyFailures24h > 0) {
+      problems.push(
+        `${proxyFailures24h} render submit(s) refused in the last 24h as VPN/PROXY traffic (403 `
+        + `ProxyNotAllowedError). OpusClip blocks datacenter egress — which is every Vercel `
+        + `function — for accounts without an ACTIVE SUBSCRIPTION, so this is an account/billing `
+        + `state, not a network setting you can change on this side. Candidates keep their submit `
+        + `attempts, so the backlog survives, but nothing renders until the subscription is active`,
+      );
+    }
     if (creditFailures24h > 0) {
       problems.push(
         `${creditFailures24h} render submit(s) refused in the last 24h for INSUFFICIENT OPUSCLIP CREDIT `
