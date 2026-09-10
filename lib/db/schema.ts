@@ -29,6 +29,11 @@ export const candidates = pgTable("candidates", {
   opusProjectId: text("opus_project_id"),            // OpusClip project rendering this candidate's clips
   renderStartedAt: ts("render_started_at"),          // when the render was SUBMITTED (timeout clock)
   submitAttempts: integer("submit_attempts").notNull().default(0), // paid create attempts (see MAX_SUBMIT_ATTEMPTS)
+  // Operator override: render and post this candidate regardless of the score gate and the
+  // editorial veto. A human picking a specific video out of /found is a direct request, and
+  // "it scored below the threshold" is not an acceptable answer to one — same reasoning as the
+  // existing summon exemption in render.ts.
+  forced: boolean("forced").notNull().default(false),
   status: text("status").notNull().default("found"), // found|scored|held|skipped|rendering|selected|posted|failed
   score: integer("score"),
   rationale: text("rationale").default(""),

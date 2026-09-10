@@ -1,4 +1,5 @@
 import DbError from "@/components/DbError";
+import ForceButton from "@/components/ForceButton";
 import { desc } from "drizzle-orm";
 import { db, candidates } from "@/lib/db";
 
@@ -33,6 +34,7 @@ export default async function FoundPage() {
               <th className="p-2 font-medium">Channel</th>
               <th className="p-2 font-medium">Score</th>
               <th className="p-2 font-medium">Status</th>
+              <th className="p-2 font-medium">Override</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-800">
@@ -44,11 +46,19 @@ export default async function FoundPage() {
                 <td className="p-2 text-neutral-400">{c.source}</td>
                 <td className="p-2 text-neutral-400">{c.channel}</td>
                 <td className="p-2">{c.score ?? "—"}</td>
-                <td className={`p-2 ${STATUS_COLOR[c.status] ?? "text-neutral-300"}`}>{c.status}</td>
+                <td className={`p-2 ${STATUS_COLOR[c.status] ?? "text-neutral-300"}`}>
+                  {c.status}{c.forced ? " · forced" : ""}
+                </td>
+                <td className="p-2">
+                  <ForceButton
+                    id={c.id} title={c.title} score={c.score ?? null} status={c.status}
+                    hasProject={Boolean(c.opusProjectId)}
+                  />
+                </td>
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan={5} className="p-3 text-neutral-500">Nothing found yet.</td></tr>
+              <tr><td colSpan={6} className="p-3 text-neutral-500">Nothing found yet.</td></tr>
             )}
           </tbody>
         </table>

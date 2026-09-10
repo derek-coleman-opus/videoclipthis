@@ -126,6 +126,9 @@ export const MIGRATION_STATEMENTS: string[] = [
   // topics or channels. JSON keyed by profile key; '{}' means "no profile has been customized".
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "profile_overrides" text NOT NULL DEFAULT '{}'`,
   `ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "curation_brief" text NOT NULL DEFAULT ''`,
+  // Operator force-render override (0021): push a below-threshold candidate through the render and
+  // post gates by hand. Additive with a false default, so it changes nothing until used.
+  `ALTER TABLE "candidates" ADD COLUMN IF NOT EXISTS "forced" boolean NOT NULL DEFAULT false`,
 ];
 
 /** True for statements that only ADD schema and can never touch a row: safe to run unattended.
