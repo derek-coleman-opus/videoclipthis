@@ -2,6 +2,7 @@ import DbError from "@/components/DbError";
 import ForceButton from "@/components/ForceButton";
 import { desc } from "drizzle-orm";
 import { db, candidates } from "@/lib/db";
+import { withSchemaHeal } from "@/lib/db/ensureSchema";
 
 export const dynamic = "force-dynamic";
 
@@ -68,5 +69,9 @@ export default async function FoundPage() {
 }
 
 async function load() {
-  return db().select().from(candidates).orderBy(desc(candidates.createdAt)).limit(100);
+  // withSchemaHeal, not a bare query: this page reads `candidates` and never calls getSettings(),
+  // so when candidates.forced was added it showed the operator `column "forced" does not exist`
+  // while a heal that could have fixed it sat behind a function this page never touches.
+  return withSchemaHeal(() =>
+    db().select().from(candidates).orderBy(desc(candidates.createdAt)).limit(100));
 }

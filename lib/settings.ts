@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db, settings, type Settings } from "@/lib/db";
-import { ensureSchema, isMissingColumnError } from "@/lib/db/ensureSchema";
+import { withSchemaHeal } from "@/lib/db/ensureSchema";
 import { DEFAULT_PROFILE_KEY, findProfile } from "@/lib/pipeline/audience";
 
 /** Read the single settings row, creating it on first access.
@@ -16,15 +16,7 @@ import { DEFAULT_PROFILE_KEY, findProfile } from "@/lib/pipeline/audience";
  *  handing the operator a dead deployment and a runbook. Costs nothing when the schema is current:
  *  the heal only runs from this catch block. */
 export async function getSettings(): Promise<Settings> {
-  try {
-    return await readOrCreateSettings();
-  } catch (e) {
-    if (!isMissingColumnError(e)) throw e;
-    await ensureSchema();
-    // Retry once. If the schema is still behind, the original error surfaces from here rather than
-    // being masked by a heal that could not fix it (a missing TABLE, or no DDL permission).
-    return await readOrCreateSettings();
-  }
+  return withSchemaHeal(readOrCreateSettings);
 }
 
 async function readOrCreateSettings(): Promise<Settings> {

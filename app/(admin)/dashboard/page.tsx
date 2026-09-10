@@ -4,6 +4,7 @@ import { getSettings } from "@/lib/settings";
 import RunButton from "@/components/RunButton";
 import RequeueButton from "@/components/RequeueButton";
 import DbError from "@/components/DbError";
+import { withSchemaHeal } from "@/lib/db/ensureSchema";
 
 export const dynamic = "force-dynamic";
 
@@ -29,26 +30,30 @@ const BADGE: Record<string, string> = {
 };
 
 async function loadData() {
-  const d = db();
-  const one = sql<number>`count(*)::int`;
-  const totalFound = Number((await d.select({ n: one }).from(candidates))[0]?.n ?? 0);
-  const posted = Number((await d.select({ n: one }).from(clips).where(eq(clips.status, "posted")))[0]?.n ?? 0);
-  const dayStart = new Date();
-  dayStart.setUTCHours(0, 0, 0, 0);
-  const postedToday = Number((await d.select({ n: one }).from(clips)
-    .where(and(eq(clips.status, "posted"), gte(clips.postedAt, dayStart))))[0]?.n ?? 0);
-  const pending = Number((await d.select({ n: one }).from(clips).where(eq(clips.status, "pending_review")))[0]?.n ?? 0);
-  const queued = Number((await d.select({ n: one }).from(clips).where(eq(clips.status, "approved")))[0]?.n ?? 0);
-  const reshared = Number((await d.select({ n: one }).from(clips).where(eq(clips.resharedBySpeaker, true)))[0]?.n ?? 0);
-  // Candidates stranded by the 402 billing lapse: submit failed, nothing was ever billed, and the
-  // backlog drain can no longer see them because submit_attempts hit the cap. Surfaced so the
-  // recovery is a button rather than SQL the operator has to be told about.
-  const stranded = Number((await d.select({ n: one }).from(candidates)
-    .where(and(eq(candidates.status, "failed"), isNull(candidates.opusProjectId))))[0]?.n ?? 0);
-  const recent = await d.select().from(events).orderBy(desc(events.createdAt)).limit(30);
-  const lastRun = (await d.select().from(runs).orderBy(desc(runs.startedAt)).limit(1))[0];
-  const cfg = await getSettings();
-  return { totalFound, posted, postedToday, pending, queued, reshared, stranded, recent, lastRun, cfg };
+  // Heal the schema on a missing column rather than showing the operator a dead page: a
+  // newly added column takes this query down until the migration is applied by hand.
+  return withSchemaHeal(async () => {
+    const d = db();
+    const one = sql<number>`count(*)::int`;
+    const totalFound = Number((await d.select({ n: one }).from(candidates))[0]?.n ?? 0);
+    const posted = Number((await d.select({ n: one }).from(clips).where(eq(clips.status, "posted")))[0]?.n ?? 0);
+    const dayStart = new Date();
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const postedToday = Number((await d.select({ n: one }).from(clips)
+      .where(and(eq(clips.status, "posted"), gte(clips.postedAt, dayStart))))[0]?.n ?? 0);
+    const pending = Number((await d.select({ n: one }).from(clips).where(eq(clips.status, "pending_review")))[0]?.n ?? 0);
+    const queued = Number((await d.select({ n: one }).from(clips).where(eq(clips.status, "approved")))[0]?.n ?? 0);
+    const reshared = Number((await d.select({ n: one }).from(clips).where(eq(clips.resharedBySpeaker, true)))[0]?.n ?? 0);
+    // Candidates stranded by the 402 billing lapse: submit failed, nothing was ever billed, and the
+    // backlog drain can no longer see them because submit_attempts hit the cap. Surfaced so the
+    // recovery is a button rather than SQL the operator has to be told about.
+    const stranded = Number((await d.select({ n: one }).from(candidates)
+      .where(and(eq(candidates.status, "failed"), isNull(candidates.opusProjectId))))[0]?.n ?? 0);
+    const recent = await d.select().from(events).orderBy(desc(events.createdAt)).limit(30);
+    const lastRun = (await d.select().from(runs).orderBy(desc(runs.startedAt)).limit(1))[0];
+    const cfg = await getSettings();
+    return { totalFound, posted, postedToday, pending, queued, reshared, stranded, recent, lastRun, cfg };
+  });
 }
 
 export default async function Dashboard() {

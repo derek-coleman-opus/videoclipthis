@@ -46,3 +46,11 @@ The canonical example is `scripts/xbot-schema-bootstrap.sql`.
   pipeline, it is a dead deployment, and it throws before `runScout` inserts its
   `runs` row, so nothing is written anywhere. The signature is **no new `runs`
   rows after a deploy**.
+- **A new column on ANY table breaks every query that selects it**, not just
+  `settings`. Drizzle selects by explicit column list, so `db().select().from(x)`
+  throws `column "..." does not exist` for a column that is in `schema.ts` but not
+  in the database. `lib/db/ensureSchema.ts` exports **`withSchemaHeal(fn)`**, which
+  applies the migration once and retries — wrap any new entry point that queries a
+  table directly. Adding `candidates.forced` took `/found` and `/dashboard` down
+  precisely because the heal was attached to `getSettings()` alone, and `/found`
+  never calls it.
