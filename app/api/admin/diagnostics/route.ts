@@ -265,6 +265,14 @@ export async function GET() {
     if ((byStatus.approved ?? 0) > 0 && hoursSince !== null && hoursSince > 24) {
       problems.push(`${byStatus.approved} clip(s) stuck in 'approved' (ready to post) but nothing has posted for ${hoursSince}h — the publish step is failing; check clips.fail_reason and recentErrors`);
     }
+    if ((byStatus.unverified ?? 0) > 0) {
+      problems.push(
+        `${byStatus.unverified} clip(s) in 'unverified' — the publish outcome was AMBIGUOUS (X may `
+        + `already have the post, or may not). The automatic drain will never retry these, by `
+        + `design: a blind retry is how the same video went out repeatedly. Check the timeline, `
+        + `then approve or reject each one from /posts`,
+      );
+    }
     if ((byStatus.failed ?? 0) > 0) {
       problems.push(`${byStatus.failed} clip(s) in 'failed' — paid renders whose publish errored. Retry them from /posts`);
     }
