@@ -39,6 +39,26 @@ function describeXError(e: unknown): Error {
   return new Error(`X publish failed${err?.code ? ` (${err.code})` : ""}: ${err?.message ?? e}${detail}`);
 }
 
+/** True when a failed publish PROVABLY did not create a post on X.
+ *
+ *  The tweet call is non-idempotent: if X accepted the post and the RESPONSE was lost (timeout,
+ *  connection reset, 5xx after the write), retrying publishes the same video a second time. So the
+ *  caller must distinguish a rejection from an unknown outcome — marking an ambiguous failure
+ *  "failed" invites a one-click retry that double-posts, which is how the same clip went out
+ *  several times.
+ *
+ *  Provably not posted: a 4xx rejection (X refused the request outright), a rate limit (throttled
+ *  before the write), and the local pre-flight failures that never reach X at all. Anything else —
+ *  no status code, a network error, a 5xx — is AMBIGUOUS and must not be auto-retried. */
+export function publishProvablyNotPosted(e: unknown): boolean {
+  const m = (e as Error)?.message ?? String(e);
+  // Local pre-flight: the clip never left this process.
+  if (/clip too large for X|clip is empty:|fetch clip \d{3}:/.test(m)) return true;
+  if (/X rate limit hit \(429\)/.test(m)) return true;
+  const code = /X publish failed \((\d{3})\)/.exec(m)?.[1];
+  return code ? Number(code) >= 400 && Number(code) < 500 : false;
+}
+
 export function xPublisher(): Publisher {
   return {
     async publish(clip, replyTo) {
