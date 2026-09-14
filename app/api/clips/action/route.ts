@@ -29,7 +29,10 @@ export async function POST(req: NextRequest) {
     const database = db();
     const clip = (await database.select().from(clips).where(eq(clips.id, id)).limit(1))[0];
     if (!clip) return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
-    const actionable = ["pending_review", "failed", "approved"].includes(clip.status);
+    // "unverified" is included deliberately: the AUTOMATIC drain never touches it (that is the whole
+  // point — the outcome was ambiguous and a retry could double-post), but a human who has checked
+  // the timeline must be able to resolve it either way. The fail reason tells them to look first.
+  const actionable = ["pending_review", "failed", "approved", "unverified"].includes(clip.status);
     if (!actionable) {
       return NextResponse.json({ ok: false, error: `clip is ${clip.status}` }, { status: 409 });
     }

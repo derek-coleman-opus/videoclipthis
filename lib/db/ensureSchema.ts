@@ -129,6 +129,21 @@ export const MIGRATION_STATEMENTS: string[] = [
   // Operator force-render override (0021): push a below-threshold candidate through the render and
   // post gates by hand. Additive with a false default, so it changes nothing until used.
   `ALTER TABLE "candidates" ADD COLUMN IF NOT EXISTS "forced" boolean NOT NULL DEFAULT false`,
+  // One live clip per candidate (0022) — the backstop against posting the same video repeatedly.
+  // Collapse duplicate LIVE clips first so the index can be created. Only non-posted rows are
+  // touched: a `posted` row records something that really went out and is never deleted.
+  `DELETE FROM "clips" c
+     WHERE c."candidate_id" IS NOT NULL
+       AND c."status" IN ('pending_review', 'approved', 'posting')
+       AND EXISTS (
+         SELECT 1 FROM "clips" o
+         WHERE o."candidate_id" = c."candidate_id"
+           AND o."status" IN ('pending_review', 'approved', 'posting')
+           AND o."id" < c."id"
+       )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "clips_candidate_live_uniq"
+     ON "clips" ("candidate_id")
+     WHERE "candidate_id" IS NOT NULL AND "status" IN ('pending_review', 'approved', 'posting')`,
 ];
 
 /** True for statements that only ADD schema and can never touch a row: safe to run unattended.

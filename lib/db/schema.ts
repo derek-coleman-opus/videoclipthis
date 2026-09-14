@@ -80,6 +80,13 @@ export const clips = pgTable("clips", {
   postedAt: ts("posted_at"),
 }, (t) => ({
   statusIdx: index("clips_status_idx").on(t.status),
+  // One LIVE clip per candidate — the hard backstop against publishing the same video twice.
+  // Scoped to postable statuses on purpose: already-`posted` rows are history (including the
+  // duplicates this index exists to prevent), and a unique constraint over them would be
+  // unsatisfiable without deleting a record of something that really was published.
+  candidateLiveUniq: uniqueIndex("clips_candidate_live_uniq")
+    .on(t.candidateId)
+    .where(sql`${t.candidateId} IS NOT NULL AND ${t.status} IN ('pending_review', 'approved', 'posting')`),
 }));
 
 /** Verified X-handle cache: name → handle, resolved once (Claude proposes, the real X profile

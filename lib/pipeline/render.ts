@@ -24,7 +24,7 @@ import {
 } from "./editorial";
 import { topPullQuotes } from "./feedback";
 import { composePost, composeSummonReply, followUpText } from "./production";
-import { xPublisher } from "./publishing";
+import { publishProvablyNotPosted, xPublisher } from "./publishing";
 import { hasXEnv } from "./env";
 import { logEvent } from "./events";
 import { slog } from "./util";
@@ -32,6 +32,12 @@ import type { DetectedCandidate, Moment } from "./types";
 
 /** Give a render this long AFTER SUBMISSION before declaring it dead. */
 const RENDER_TIMEOUT_H = Number(process.env.RENDER_TIMEOUT_H ?? 2);
+
+/** How long a "collecting" claim may be held before it is assumed stranded and released.
+ *  A real collect takes seconds (one OpusClip check + one editor call); this is far above that and
+ *  far below RENDER_TIMEOUT_H, so a function killed mid-collect gets retried instead of silently
+ *  dropping a paid render, and a genuinely in-flight collect is never stolen from. */
+const COLLECT_CLAIM_TTL_MIN = Number(process.env.COLLECT_CLAIM_TTL_MIN ?? 15);
 
 /** Pending-review clips older than this are stale — the moment has passed, so expire them
  *  (we only want to post NEW content). Env-overridable. */
@@ -97,6 +103,17 @@ export async function collectRenders(): Promise<CollectResult> {
   const apiKey = process.env.OPUSCLIP_API_KEY ?? "";
   const base = process.env.OPUSCLIP_API_BASE ?? "";
 
+  // Release claims stranded by a killed function (serverless timeout, deploy mid-run). Without
+  // this a "collecting" row is in no query at all and its paid render is lost forever.
+  const staleClaim = new Date(Date.now() - COLLECT_CLAIM_TTL_MIN * 60 * 1000);
+  const released = await database.update(candidates)
+    .set({ status: "rendering" })
+    .where(and(eq(candidates.status, "collecting"), lt(candidates.renderStartedAt, staleClaim)))
+    .returning({ id: candidates.id });
+  if (released.length) {
+    slog("collect_claims_released", { n: released.length });
+  }
+
   const inFlight = await database
     .select()
     .from(candidates)
@@ -109,6 +126,16 @@ export async function collectRenders(): Promise<CollectResult> {
   let failed = 0;
 
   for (const row of inFlight) {
+    // CLAIM IT FIRST, for the same reason the posting drain does: scout and summon are both on
+    // */30 and both call this, so two runs could pick up the same "rendering" candidate, both run
+    // the editor, and both insert a clip row for it — two clips for one video, each of which then
+    // posts. The compare-and-swap is atomic, so exactly one run proceeds.
+    const claimed = await database.update(candidates)
+      .set({ status: "collecting" })
+      .where(and(eq(candidates.id, row.id), eq(candidates.status, "rendering")))
+      .returning({ id: candidates.id });
+    if (!claimed.length) continue; // another run has it
+
     // Timeout clock starts at SUBMISSION, not detection — a candidate can legitimately wait
     // hours as "scored" for a free render slot before it is ever submitted.
     const startedAt = row.renderStartedAt ?? row.detectedAt ?? row.createdAt ?? new Date();
@@ -122,8 +149,12 @@ export async function collectRenders(): Promise<CollectResult> {
       clipsReady = res.clips.filter((c) => c.clipUrl && !c.renderPending).sort((a, b) => b.score - a.score);
       done = res.done;
     } catch (e) {
-      // Transient check failure: leave it rendering unless it's already stale.
-      if (!expired) continue;
+      // Transient check failure: leave it rendering unless it's already stale. Releasing the claim
+      // matters — a row left "collecting" is in no query and would never be retried.
+      if (!expired) {
+        await database.update(candidates).set({ status: "rendering" }).where(eq(candidates.id, row.id));
+        continue;
+      }
       await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, row.id));
       await logEvent("error", `Render check failed for "${row.title}": ${(e as Error).message}`, "candidates", row.id);
       failed++;
@@ -136,6 +167,9 @@ export async function collectRenders(): Promise<CollectResult> {
         await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, row.id));
         await logEvent("error", `Render timed out (no clips after ${RENDER_TIMEOUT_H}h): ${row.title}`, "candidates", row.id);
         failed++;
+      } else {
+        // Release the claim so the next run picks it up again.
+        await database.update(candidates).set({ status: "rendering" }).where(eq(candidates.id, row.id));
       }
       continue;
     }
@@ -203,6 +237,18 @@ export async function collectRenders(): Promise<CollectResult> {
         autoPost = false;
         holdReason = screen.reason;
       }
+    }
+
+    // One clip per candidate. The claim above makes a concurrent duplicate very unlikely, and the
+    // partial unique index makes it impossible; this check turns what would be a constraint
+    // violation into a clean skip, and also covers a candidate re-entering the loop after a
+    // crash between the insert and the status update.
+    const already = await database
+      .select({ id: clips.id }).from(clips).where(eq(clips.candidateId, row.id)).limit(1);
+    if (already.length) {
+      await database.update(candidates).set({ status: "selected" }).where(eq(candidates.id, row.id));
+      slog("collect_skip_duplicate", { candidateId: row.id, existingClipId: already[0].id });
+      continue;
     }
 
     // Insert the clip row BEFORE any publish attempt — the paid render is never lost to a
@@ -274,6 +320,16 @@ export async function drainApprovedClips(cfg?: Settings): Promise<number> {
 
   let posted = 0;
   for (const clip of queue) {
+    // CLAIM IT FIRST. The scout and summon crons are both on */30 and both call this, and a manual
+    // "Run Scout now" can overlap either — so a plain select-then-publish let two runs pick up the
+    // same approved clip and post it twice. This compare-and-swap is atomic: exactly one caller
+    // gets the row, everyone else sees zero rows and moves on.
+    const claimed = await database.update(clips)
+      .set({ status: "posting" })
+      .where(and(eq(clips.id, clip.id), eq(clips.status, "approved")))
+      .returning({ id: clips.id });
+    if (!claimed.length) continue; // another run already has it
+
     const isSummon = clip.kind === "summon";
     if (!isSummon) {
       if (scoutPostedToday >= settings.dailyClipCap) break; // cap reached — rest wait for tomorrow
@@ -297,10 +353,27 @@ export async function drainApprovedClips(cfg?: Settings): Promise<number> {
       if (!isSummon) scoutPostedToday++;
       posted++;
     } catch (e) {
+      const msg = (e as Error).message;
+      // A publish that PROVABLY did not post is safe to retry; an ambiguous one is not. The tweet
+      // call is non-idempotent, so if X accepted the post and the response was lost, marking this
+      // "failed" offers the operator a one-click retry that posts the same video again — which is
+      // how the same clip went out several times. "unverified" keeps it out of the automatic
+      // drain and tells the operator to check the timeline before deciding.
+      const safeToRetry = publishProvablyNotPosted(e);
       await database.update(clips)
-        .set({ status: "failed", failReason: (e as Error).message.slice(0, 500) })
+        .set({
+          status: safeToRetry ? "failed" : "unverified",
+          failReason: (safeToRetry
+            ? msg
+            : `AMBIGUOUS — X may already have this post. Check the timeline before retrying: ${msg}`
+          ).slice(0, 500),
+        })
         .where(eq(clips.id, clip.id));
-      await logEvent("error", `Publish failed for clip #${clip.id}: ${(e as Error).message}`, "clips", clip.id);
+      await logEvent("error",
+        safeToRetry
+          ? `Publish failed for clip #${clip.id} (not posted, safe to retry): ${msg}`
+          : `Publish OUTCOME UNKNOWN for clip #${clip.id} — it may be live on X. Check before retrying: ${msg}`,
+        "clips", clip.id);
       // Keep draining the rest — one bad clip (e.g. an expired asset URL) shouldn't block the queue.
     }
   }
