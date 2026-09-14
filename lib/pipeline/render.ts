@@ -11,7 +11,7 @@
 // project's renders, picks the best, writes the pull quote, and vetoes clips too boring to post.
 // A vetoed clip is queued for review, never deleted — the render is already paid for.
 
-import { and, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, isNull, lt, or } from "drizzle-orm";
 import { db, candidates, clips, summonRequests, type Candidate, type Clip, type Settings } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import { findProfile } from "./audience";
@@ -108,10 +108,33 @@ export async function collectRenders(): Promise<CollectResult> {
   const staleClaim = new Date(Date.now() - COLLECT_CLAIM_TTL_MIN * 60 * 1000);
   const released = await database.update(candidates)
     .set({ status: "rendering" })
-    .where(and(eq(candidates.status, "collecting"), lt(candidates.renderStartedAt, staleClaim)))
+    // A NULL render_started_at counts as stale: it cannot be a fresh claim (the timestamp is set at
+    // submit), and excluding NULLs would strand exactly the rows nothing else can reach.
+    .where(and(
+      eq(candidates.status, "collecting"),
+      or(lt(candidates.renderStartedAt, staleClaim), isNull(candidates.renderStartedAt)),
+    ))
     .returning({ id: candidates.id });
   if (released.length) {
     slog("collect_claims_released", { n: released.length });
+  }
+
+  // Same hazard on the posting side: a clip claimed into "posting" whose function was killed
+  // mid-publish is in no query — not drained, not reported, never resolved. It becomes
+  // "unverified" rather than going back to "approved", because the publish may well have reached
+  // X; re-queueing it for the drain is precisely the double-post this claim exists to prevent.
+  const stalePosting = await database.update(clips)
+    .set({
+      status: "unverified",
+      failReason: "AMBIGUOUS — the publish was interrupted and its outcome is unknown. Check the "
+        + "timeline before retrying: this clip may already be live on X.",
+    })
+    .where(and(eq(clips.status, "posting"), lt(clips.createdAt, staleClaim)))
+    .returning({ id: clips.id });
+  if (stalePosting.length) {
+    await logEvent("error",
+      `${stalePosting.length} clip(s) were left mid-publish and their outcome is unknown — check `
+      + `the timeline before retrying them from /posts`);
   }
 
   const inFlight = await database
@@ -142,145 +165,166 @@ export async function collectRenders(): Promise<CollectResult> {
     const ageMs = Date.now() - new Date(startedAt).getTime();
     const expired = ageMs > RENDER_TIMEOUT_H * 3600 * 1000;
 
-    let clipsReady: OpusClipResult[] = [];
-    let done = false;
+    // ONE BAD CANDIDATE MUST NOT KILL THE RUN. Everything below — the editor call, the safety
+    // screen, post composition, the clip insert, cross-posting — was unguarded, so a single throw
+    // escaped this loop, and because runScout awaits collectRenders() before it discovers or
+    // submits anything, the WHOLE pipeline stopped. Not hypothetical: renders ran hourly and then
+    // ceased entirely, while this loop kept re-fetching the first few projects every cycle and
+    // dying at the same row.
     try {
-      const res = await opusclipFetchClips(row.opusProjectId as string, apiKey, base);
-      clipsReady = res.clips.filter((c) => c.clipUrl && !c.renderPending).sort((a, b) => b.score - a.score);
-      done = res.done;
-    } catch (e) {
-      // Transient check failure: leave it rendering unless it's already stale. Releasing the claim
-      // matters — a row left "collecting" is in no query and would never be retried.
-      if (!expired) {
-        await database.update(candidates).set({ status: "rendering" }).where(eq(candidates.id, row.id));
+
+      let clipsReady: OpusClipResult[] = [];
+      let done = false;
+      try {
+        const res = await opusclipFetchClips(row.opusProjectId as string, apiKey, base);
+        clipsReady = res.clips.filter((c) => c.clipUrl && !c.renderPending).sort((a, b) => b.score - a.score);
+        done = res.done;
+      } catch (e) {
+        // Transient check failure: leave it rendering unless it's already stale. Releasing the claim
+        // matters — a row left "collecting" is in no query and would never be retried.
+        if (!expired) {
+          await database.update(candidates).set({ status: "rendering" }).where(eq(candidates.id, row.id));
+          continue;
+        }
+        await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, row.id));
+        await logEvent("error", `Render check failed for "${row.title}": ${(e as Error).message}`, "candidates", row.id);
+        failed++;
         continue;
       }
-      await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, row.id));
-      await logEvent("error", `Render check failed for "${row.title}": ${(e as Error).message}`, "candidates", row.id);
-      failed++;
-      continue;
-    }
 
-    // Still rendering: take a partial result once it's stale, otherwise keep waiting.
-    if (!done && !(expired && clipsReady.length)) {
-      if (expired) {
-        await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, row.id));
-        await logEvent("error", `Render timed out (no clips after ${RENDER_TIMEOUT_H}h): ${row.title}`, "candidates", row.id);
-        failed++;
-      } else {
-        // Release the claim so the next run picks it up again.
-        await database.update(candidates).set({ status: "rendering" }).where(eq(candidates.id, row.id));
+      // Still rendering: take a partial result once it's stale, otherwise keep waiting.
+      if (!done && !(expired && clipsReady.length)) {
+        if (expired) {
+          await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, row.id));
+          await logEvent("error", `Render timed out (no clips after ${RENDER_TIMEOUT_H}h): ${row.title}`, "candidates", row.id);
+          failed++;
+        } else {
+          // Release the claim so the next run picks it up again.
+          await database.update(candidates).set({ status: "rendering" }).where(eq(candidates.id, row.id));
+        }
+        continue;
       }
-      continue;
-    }
 
-    // THE EDITOR. One Claude call compares the top renders, picks the best, scores its
-    // shareability, and writes the verbatim pull quote used as the hook. We pay OpusClip per
-    // minute of SOURCE video, so every clip in the project is already bought — judging three
-    // instead of blindly taking clipsReady[0] costs one prompt and rescues the cases where the
-    // highest retention score is the least interesting thing said.
-    const verdict = await reviewClips({
-      title: row.title,
-      speaker: row.speaker ?? undefined,
-      channel: row.channel ?? undefined,
-      transcript: row.transcript ?? undefined,
-      niche: cfg.niche ?? "",
-      // Clip-level rubric from the active profile, so the editor's bar matches the lane the
-      // scorer and curator were working in rather than always judging for developers.
-      editorialRubric: profile.editorialRubric,
-      editorialFloor: profile.editorialFloor,
-      guardrails: profile.guardrails,
-      winners: await topPullQuotes(),
-      options: clipsReady.slice(0, EDITORIAL_MAX_OPTIONS).map((c) => ({
-        caption: c.caption,
-        durationS: Math.max(0, c.endS - c.startS),
-        hookScore: c.score,
-      })),
-    });
-    const chosen = clipsReady[verdict?.pick ?? 0] ?? clipsReady[0];
-    const moment = toMoment(chosen);
-    const d = toDetected(row);
-    // Summon clips are in-thread comments (credit the video author, no link back);
-    // scout clips are standalone credit-first posts with the source link in a follow-up.
-    const isSummonRow = row.source === "summon";
-    const postText = isSummonRow
-      ? composeSummonReply(d, moment, verdict)
-      : composePost(d, moment, verdict);
-    const followUp = isSummonRow ? "" : followUpText(d);
+      // THE EDITOR. One Claude call compares the top renders, picks the best, scores its
+      // shareability, and writes the verbatim pull quote used as the hook. We pay OpusClip per
+      // minute of SOURCE video, so every clip in the project is already bought — judging three
+      // instead of blindly taking clipsReady[0] costs one prompt and rescues the cases where the
+      // highest retention score is the least interesting thing said.
+      const verdict = await reviewClips({
+        title: row.title,
+        speaker: row.speaker ?? undefined,
+        channel: row.channel ?? undefined,
+        transcript: row.transcript ?? undefined,
+        niche: cfg.niche ?? "",
+        // Clip-level rubric from the active profile, so the editor's bar matches the lane the
+        // scorer and curator were working in rather than always judging for developers.
+        editorialRubric: profile.editorialRubric,
+        editorialFloor: profile.editorialFloor,
+        guardrails: profile.guardrails,
+        winners: await topPullQuotes(),
+        options: clipsReady.slice(0, EDITORIAL_MAX_OPTIONS).map((c) => ({
+          caption: c.caption,
+          durationS: Math.max(0, c.endS - c.startS),
+          hookScore: c.score,
+        })),
+      });
+      const chosen = clipsReady[verdict?.pick ?? 0] ?? clipsReady[0];
+      const moment = toMoment(chosen);
+      const d = toDetected(row);
+      // Summon clips are in-thread comments (credit the video author, no link back);
+      // scout clips are standalone credit-first posts with the source link in a follow-up.
+      const isSummonRow = row.source === "summon";
+      const postText = isSummonRow
+        ? composeSummonReply(d, moment, verdict)
+        : composePost(d, moment, verdict);
+      const followUp = isSummonRow ? "" : followUpText(d);
 
-    // Summon candidates reply in-thread (always auto); scout clips obey the autonomy gate.
-    const summonReq = isSummonRow
-      ? (await database.select().from(summonRequests).where(eq(summonRequests.candidateId, row.id)).limit(1))[0]
-      : undefined;
-    let autoPost = isSummonRow || cfg.autonomy === "auto";
+      // Summon candidates reply in-thread (always auto); scout clips obey the autonomy gate.
+      const summonReq = isSummonRow
+        ? (await database.select().from(summonRequests).where(eq(summonRequests.candidateId, row.id)).limit(1))[0]
+        : undefined;
+      let autoPost = isSummonRow || cfg.autonomy === "auto";
 
-    // The editorial veto: a clip the editor judged unshareable is never posted unattended. It
-    // lands in the review queue rather than being discarded — the render is paid for and the
-    // operator may disagree with the editor. Summon replies are exempt: a human asked for that
-    // specific video, and "nothing here was interesting enough" is not an acceptable answer to a
-    // direct request.
-    let vetoNote = "";
-    // A forced candidate is exempt for the same reason summon is: the operator overrode the score
-    // gate on this specific video, so "the editor didn't like it either" would just move the veto
-    // one step later and waste the render they deliberately paid for.
-    if (autoPost && !isSummonRow && !row.forced && !editorialPasses(verdict, minScore)) {
-      autoPost = false;
-      vetoNote = `editor scored it ${verdict?.score}/${minScore} — ${verdict?.note || "not shareable enough"}`;
-    }
-
-    // Unattended posts get a final content screen (adult/violent/hate/harassment → held for a
-    // human). Manual review-mode clips skip it — the human approval IS the screen.
-    let holdReason = "";
-    if (autoPost) {
-      const screen = await screenClipForAutoPost(row.title, moment.hookCaption, postText);
-      if (!screen.allow) {
+      // The editorial veto: a clip the editor judged unshareable is never posted unattended. It
+      // lands in the review queue rather than being discarded — the render is paid for and the
+      // operator may disagree with the editor. Summon replies are exempt: a human asked for that
+      // specific video, and "nothing here was interesting enough" is not an acceptable answer to a
+      // direct request.
+      let vetoNote = "";
+      // A forced candidate is exempt for the same reason summon is: the operator overrode the score
+      // gate on this specific video, so "the editor didn't like it either" would just move the veto
+      // one step later and waste the render they deliberately paid for.
+      if (autoPost && !isSummonRow && !row.forced && !editorialPasses(verdict, minScore)) {
         autoPost = false;
-        holdReason = screen.reason;
+        vetoNote = `editor scored it ${verdict?.score}/${minScore} — ${verdict?.note || "not shareable enough"}`;
       }
-    }
 
-    // One clip per candidate. The claim above makes a concurrent duplicate very unlikely, and the
-    // partial unique index makes it impossible; this check turns what would be a constraint
-    // violation into a clean skip, and also covers a candidate re-entering the loop after a
-    // crash between the insert and the status update.
-    const already = await database
-      .select({ id: clips.id }).from(clips).where(eq(clips.candidateId, row.id)).limit(1);
-    if (already.length) {
+      // Unattended posts get a final content screen (adult/violent/hate/harassment → held for a
+      // human). Manual review-mode clips skip it — the human approval IS the screen.
+      let holdReason = "";
+      if (autoPost) {
+        const screen = await screenClipForAutoPost(row.title, moment.hookCaption, postText);
+        if (!screen.allow) {
+          autoPost = false;
+          holdReason = screen.reason;
+        }
+      }
+
+      // One clip per candidate. The claim above makes a concurrent duplicate very unlikely, and the
+      // partial unique index makes it impossible; this check turns what would be a constraint
+      // violation into a clean skip, and also covers a candidate re-entering the loop after a
+      // crash between the insert and the status update.
+      const already = await database
+        .select({ id: clips.id }).from(clips).where(eq(clips.candidateId, row.id)).limit(1);
+      if (already.length) {
+        await database.update(candidates).set({ status: "selected" }).where(eq(candidates.id, row.id));
+        slog("collect_skip_duplicate", { candidateId: row.id, existingClipId: already[0].id });
+        continue;
+      }
+
+      // Insert the clip row BEFORE any publish attempt — the paid render is never lost to a
+      // publish failure, and there is no orphan-tweet window.
+      const [clip] = await database.insert(clips).values({
+        candidateId: row.id, startS: moment.startS, endS: moment.endS,
+        hookCaption: moment.hookCaption, postText, followUpText: followUp,
+        pullQuote: verdict?.pullQuote ?? "",
+        editorialScore: verdict?.score ?? null,
+        editorialNote: vetoNote || verdict?.note || "",
+        clipUrl: moment.clipUrl,
+        opusClipId: chosen.clipId || null,
+        kind: isSummonRow ? "summon" : "scout",
+        status: autoPost ? "approved" : "pending_review",
+        replyTo: summonReq?.tweetId ?? null, costUsd: moment.costUsd,
+      }).returning();
       await database.update(candidates).set({ status: "selected" }).where(eq(candidates.id, row.id));
-      slog("collect_skip_duplicate", { candidateId: row.id, existingClipId: already[0].id });
-      continue;
+
+      const picked = clipsReady.length > 1 ? ` (best of ${Math.min(clipsReady.length, EDITORIAL_MAX_OPTIONS)})` : "";
+      await logEvent(
+        holdReason || vetoNote ? "held" : "scored",
+        holdReason
+          ? `Clip HELD by safety screen (needs your review): ${row.title} — ${holdReason}`
+          : vetoNote
+            ? `Clip VETOED by the editor (in review, yours to override): ${row.title} — ${vetoNote}`
+            : autoPost
+              ? `Clip ready — queued to post${picked}${verdict ? ` [editor ${verdict.score}]` : ""}: ${row.title}`
+              : `Clip ready for review${picked}: ${row.title}`,
+        "clips", clip.id,
+      );
+      collected++;
+  
+    } catch (e) {
+      // Release the claim so the row is retried rather than stranded in "collecting", where no
+      // query would ever see it again. An expired one is terminal; the render is already lost.
+      await database.update(candidates)
+        .set({ status: expired ? "failed" : "rendering" })
+        .where(eq(candidates.id, row.id));
+      if (expired) failed++;
+      await logEvent("error",
+        `Collect failed for "${row.title}"${expired ? " (expired — giving up)" : " (will retry)"}: `
+        + `${(e as Error).message}`,
+        "candidates", row.id);
     }
-
-    // Insert the clip row BEFORE any publish attempt — the paid render is never lost to a
-    // publish failure, and there is no orphan-tweet window.
-    const [clip] = await database.insert(clips).values({
-      candidateId: row.id, startS: moment.startS, endS: moment.endS,
-      hookCaption: moment.hookCaption, postText, followUpText: followUp,
-      pullQuote: verdict?.pullQuote ?? "",
-      editorialScore: verdict?.score ?? null,
-      editorialNote: vetoNote || verdict?.note || "",
-      clipUrl: moment.clipUrl,
-      opusClipId: chosen.clipId || null,
-      kind: isSummonRow ? "summon" : "scout",
-      status: autoPost ? "approved" : "pending_review",
-      replyTo: summonReq?.tweetId ?? null, costUsd: moment.costUsd,
-    }).returning();
-    await database.update(candidates).set({ status: "selected" }).where(eq(candidates.id, row.id));
-
-    const picked = clipsReady.length > 1 ? ` (best of ${Math.min(clipsReady.length, EDITORIAL_MAX_OPTIONS)})` : "";
-    await logEvent(
-      holdReason || vetoNote ? "held" : "scored",
-      holdReason
-        ? `Clip HELD by safety screen (needs your review): ${row.title} — ${holdReason}`
-        : vetoNote
-          ? `Clip VETOED by the editor (in review, yours to override): ${row.title} — ${vetoNote}`
-          : autoPost
-            ? `Clip ready — queued to post${picked}${verdict ? ` [editor ${verdict.score}]` : ""}: ${row.title}`
-            : `Clip ready for review${picked}: ${row.title}`,
-      "clips", clip.id,
-    );
-    collected++;
-  }
+}
 
   // Drain the posting queue: publish "approved" clips under the daily cap + pacing.
   const posted = await drainApprovedClips(cfg);
