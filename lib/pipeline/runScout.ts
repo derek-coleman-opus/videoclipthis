@@ -16,7 +16,7 @@ import {
 } from "./opusclip";
 import { findProfile } from "./audience";
 import { needsCreditResolution } from "./production";
-import { collectRenders } from "./render";
+import { collectRenders, type CollectResult } from "./render";
 import { matchFigure } from "./figures";
 import { reshareBoost } from "./feedback";
 import { logEvent } from "./events";
@@ -67,7 +67,21 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   }
 
   // Phase B first: collect any renders that finished since the last run (clips queue/post here).
-  const collect = await collectRenders();
+  //
+  // GUARDED, because this used to be the single point of failure for the entire pipeline: an
+  // unhandled throw in here killed the run before discovery or submission ran at all, so one
+  // poisoned candidate stopped everything — indefinitely, since the next run hit the same row.
+  // Collecting is Phase B; failing to collect must never prevent Phase A from finding and
+  // submitting new work.
+  let collect: CollectResult = { checked: 0, collected: 0, posted: 0, failed: 0, expired: 0 };
+  try {
+    collect = await collectRenders();
+  } catch (e) {
+    await logEvent("error",
+      `Collect phase failed — continuing to discovery so the pipeline does not stall: `
+      + `${(e as Error).message}`);
+    slog("collect_phase_failed", { error: (e as Error).message });
+  }
 
   const figures = await getFigures();
   // Figure + topic searches cost 100 YouTube quota units each — only run them every few hours,
