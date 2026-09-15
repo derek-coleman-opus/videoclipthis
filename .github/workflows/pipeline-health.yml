@@ -1,0 +1,43 @@
+name: Pipeline health
+
+# The pipeline runs unattended on Vercel cron. Nothing outside it ever checked whether it was
+# still alive, so every outage was found days late by noticing an absence of posts. This watches
+# it from outside and files a GitHub issue when it stops.
+#
+# Setup (Settings → Secrets and variables → Actions):
+#   HEALTH_URL    https://<your-domain>/api/health
+#   HEALTH_TOKEN  the same value set as HEALTH_TOKEN in Vercel
+#
+# Until both are set the job opens an issue saying so, rather than passing silently — an
+# unconfigured monitor that reports success is the exact failure this repo keeps hitting.
+
+on:
+  schedule:
+    # Hourly. The health check only declares a stall after STALL_RUN_H (2h), so polling faster
+    # cannot detect anything sooner. Offset off the hour because :00 is the busiest slot on
+    # GitHub's shared schedulers and runs there are the most delayed.
+    - cron: "37 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: pipeline-health
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check pipeline health
+        env:
+          HEALTH_URL: ${{ secrets.HEALTH_URL }}
+          HEALTH_TOKEN: ${{ secrets.HEALTH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: ./scripts/health-monitor.sh
