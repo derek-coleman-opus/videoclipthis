@@ -3,6 +3,7 @@ import { db, candidates, clips, events, runs } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import RunButton from "@/components/RunButton";
 import RequeueButton from "@/components/RequeueButton";
+import { computeHealth } from "@/lib/pipeline/health";
 import DbError from "@/components/DbError";
 import { withSchemaHeal } from "@/lib/db/ensureSchema";
 
@@ -49,10 +50,18 @@ async function loadData() {
     // recovery is a button rather than SQL the operator has to be told about.
     const stranded = Number((await d.select({ n: one }).from(candidates)
       .where(and(eq(candidates.status, "failed"), isNull(candidates.opusProjectId))))[0]?.n ?? 0);
-    const recent = await d.select().from(events).orderBy(desc(events.createdAt)).limit(30);
+    // The same verdict the /api/health monitor reads, rendered where the operator already looks.
+  // Failing to compute it must never blank the dashboard, so it degrades to "unknown".
+  let health: Awaited<ReturnType<typeof computeHealth>> | null = null;
+  try {
+    health = await computeHealth();
+  } catch {
+    health = null;
+  }
+  const recent = await d.select().from(events).orderBy(desc(events.createdAt)).limit(30);
     const lastRun = (await d.select().from(runs).orderBy(desc(runs.startedAt)).limit(1))[0];
     const cfg = await getSettings();
-    return { totalFound, posted, postedToday, pending, queued, reshared, stranded, recent, lastRun, cfg };
+    return { totalFound, posted, postedToday, pending, queued, reshared, stranded, health, recent, lastRun, cfg };
   });
 }
 
@@ -63,7 +72,7 @@ export default async function Dashboard() {
   } catch (e) {
     return <DbError error={e} />;
   }
-  const { totalFound, posted, postedToday, pending, queued, reshared, stranded, recent, lastRun, cfg } = data;
+  const { totalFound, posted, postedToday, pending, queued, reshared, stranded, health, recent, lastRun, cfg } = data;
 
   return (
     <div className="space-y-6">
@@ -74,6 +83,33 @@ export default async function Dashboard() {
         </div>
         <RunButton />
       </div>
+
+      {/* HEALTH FIRST. Every outage in this pipeline's history was invisible until someone noticed
+          an absence of posts days later — the numbers below all read normal while nothing works.
+          This says plainly whether it is running, and if not, why. */}
+      {health && health.problems.length > 0 && (
+        <div className={`rounded-lg border p-4 ${
+          health.stalled ? "border-red-800 bg-red-950/40" : "border-amber-800 bg-amber-950/30"
+        }`}>
+          <div className="mb-2 text-sm font-semibold">
+            {health.stalled ? "🔴 PIPELINE STALLED" : "🟠 Needs attention"}
+            <span className="ml-2 font-normal text-neutral-400">
+              {health.pipeline.hoursSinceFinishedRun === null
+                ? "no run has ever completed"
+                : `last completed run ${String(health.pipeline.hoursSinceFinishedRun)}h ago`}
+            </span>
+          </div>
+          <ul className="list-disc space-y-1 pl-5 text-sm text-neutral-300">
+            {health.problems.map((p) => <li key={p}>{p}</li>)}
+          </ul>
+        </div>
+      )}
+      {health && health.problems.length === 0 && (
+        <div className="rounded-lg border border-green-900 bg-green-950/30 p-3 text-sm">
+          🟢 Pipeline healthy — last completed run {String(health.pipeline.hoursSinceFinishedRun ?? "?")}h ago,
+          {" "}{String(health.pipeline.renderableQueue ?? 0)} in the render queue
+        </div>
+      )}
 
       {/* Recovery control, only rendered when something is actually stranded. Sits above the stats
           because an empty render queue is the one condition where every number below reads normal
