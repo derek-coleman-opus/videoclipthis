@@ -1,9 +1,10 @@
-import { and, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db, candidates, runs } from "@/lib/db";
 import { getSettings, parseWatchChannels, parseSearchTopics, updateSummonState } from "@/lib/settings";
 import {
   DAILY_SOURCE_MINUTES_CAP, DEFAULT_THRESHOLD, MAX_CLIPS_PER_RUN, MAX_CONCURRENT_RENDERS,
-  MAX_SUBMIT_ATTEMPTS, MIN_CREDITS_REMAINING, RENDER_SUBMIT_MULTIPLIER, FIGURE_SEARCH_INTERVAL_H,
+  MAX_SOURCE_MINUTES_PER_VIDEO, MAX_SUBMIT_ATTEMPTS, MIN_CREDITS_REMAINING,
+  RENDER_SUBMIT_MULTIPLIER, FIGURE_SEARCH_INTERVAL_H,
   SEARCH_TOPICS, SEARCH_BUDGET_PER_BURST, WATCHLIST,
 } from "./config";
 import { requireScoutEnv } from "./env";
@@ -215,6 +216,19 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       return;
     }
 
+    // Per-video ceiling. The daily cap above is an AGGREGATE and says nothing about one request:
+    // OpusClip prices and refuses per video, so a single over-long source is rejected outright no
+    // matter how much daily budget is left. Leave it queued rather than failing it — the ceiling
+    // is an account-balance judgement, not a verdict on the video.
+    if (minutes > MAX_SOURCE_MINUTES_PER_VIDEO) {
+      queued++;
+      await logEvent("scored",
+        `Queued — ${Math.round(minutes)} min source exceeds the ${MAX_SOURCE_MINUTES_PER_VIDEO} min `
+        + `per-video ceiling (OpusClip charges and refuses per video): ${c.title}`,
+        "candidates", c.id);
+      return;
+    }
+
     const attempts = (c.submitAttempts ?? 0) + 1;
     try {
       // Count the attempt BEFORE the call: if the response is lost after OpusClip already
@@ -305,6 +319,36 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
     for (const c of backlog) {
       if (slots <= 0) break;
       await submitRender(c);
+    }
+
+    // SHORTEST-FIRST RETRY. A credit refusal is per video, not per account: "not enough credits to
+    // cover your video length … or shorten your video". The pass above orders by score, and
+    // long-form podcasts score well, so on a small balance it offers nothing but the one shape of
+    // request the account cannot accept — every run 402s and the pipeline reads as dead while the
+    // queue is full. The existing code already reasoned this out in a comment and then did nothing
+    // with it.
+    // So when the wall is hit and slots remain, come back with the shortest queued candidates.
+    // Nothing was billed and no attempt was consumed by the refusal, so the only cost is a
+    // rejected POST, and the upside is the backlog actually moving on a constrained account.
+    if (creditWallHit && slots > 0) {
+      const shortest = await database.select().from(candidates)
+        .where(and(
+          inArray(candidates.status, ["scored", "skipped"]),
+          isNull(candidates.opusProjectId),
+          or(sql`${candidates.score} >= ${threshold}`, eq(candidates.forced, true)),
+          sql`${candidates.submitAttempts} < ${MAX_SUBMIT_ATTEMPTS}`,
+          // Only rows the pass above did not already try, and only ones with a known duration —
+          // a 0 here means "unknown", not "instant", and would sort to the front on no evidence.
+          sql`${candidates.durationS} > 0`,
+        ))
+        .orderBy(asc(candidates.durationS))
+        .limit(slots);
+      const tried = new Set(backlog.map((c) => c.id));
+      for (const c of shortest) {
+        if (slots <= 0) break;
+        if (tried.has(c.id)) continue;
+        await submitRender(c);
+      }
     }
   }
 

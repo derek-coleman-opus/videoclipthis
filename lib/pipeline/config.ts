@@ -41,6 +41,15 @@ export const MAX_CLIPS_PER_RUN = Number(process.env.MAX_CLIPS_PER_RUN ?? 25);
  *  (~10 h ≈ 600 credits, ~18k/month) — well inside a 90k/month plan with room for Summon. */
 export const DAILY_SOURCE_MINUTES_CAP = Number(process.env.DAILY_SOURCE_MINUTES_CAP ?? 600);
 
+/** Never submit a SINGLE video longer than this. OpusClip bills per minute of source and refuses
+ *  per request — "You don't have enough credits to cover your video length. Please shorten your
+ *  video, or purchase more hours." — so on an account with a modest balance one three-hour podcast
+ *  402s while a forty-minute talk from the same backlog would have gone through. Without this cap
+ *  the drain only ever offered the longest videos, because it orders by score and long-form
+ *  podcasts score well: the pipeline kept presenting the one shape of request the account could
+ *  not accept, and read as a total outage. */
+export const MAX_SOURCE_MINUTES_PER_VIDEO = Number(process.env.MAX_SOURCE_MINUTES_PER_VIDEO ?? 180);
+
 /** Never submit more renders per day than you could plausibly post. Posting is capped by
  *  settings.dailyClipCap; renders overshoot it because not every render yields a postable clip
  *  and review-mode clips expire unposted. This multiplier is that allowance — submissions can
