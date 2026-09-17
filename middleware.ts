@@ -23,6 +23,12 @@ export function middleware(req: NextRequest) {
   if (pathname.startsWith("/api/cron")) {
     return NextResponse.next(); // authenticated by CRON_SECRET in the route handlers
   }
+  // Read-only health, authenticated by HEALTH_TOKEN inside the handler (and disabled entirely when
+  // that is unset). Kept out of basic auth so an external monitor can watch the pipeline without
+  // holding admin credentials — it exposes state, never control and never secrets.
+  if (pathname === "/api/health") {
+    return NextResponse.next();
+  }
   const expected = process.env.ADMIN_PASSWORD;
   if (!expected) return NextResponse.next(); // unconfigured (local dev) → allow
 
