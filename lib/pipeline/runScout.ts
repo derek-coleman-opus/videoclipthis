@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db, candidates, runs } from "@/lib/db";
 import { getSettings, parseWatchChannels, parseSearchTopics, updateSummonState } from "@/lib/settings";
 import {
@@ -282,7 +282,18 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   if (slots > 0) {
     const backlog = await database.select().from(candidates)
       .where(and(
-        eq(candidates.status, "scored"),
+        // "skipped" IS NOT A VERDICT, IT IS A SNAPSHOT. It means only "scored below the threshold
+        // that was set at the time" — it is written in exactly one place, the precision gate
+        // below. Selecting "scored" alone made it permanent, and that deadlocked the pipeline:
+        // lowering the threshold revived nothing, because every candidate under the old one was
+        // already stamped skipped and invisible here; and they could never be re-scored either,
+        // since the video_id unique index makes rediscovery a no-op. 100 candidates scoring 28-52
+        // sat unreachable behind a threshold of 75 while the queue read EMPTY and the only way out
+        // was clicking Force on each row by hand.
+        // Including it here costs nothing — the score gate below is what actually decides — and it
+        // makes the threshold mean what an operator expects: change it, and the backlog is
+        // re-judged against the new value, in both directions.
+        inArray(candidates.status, ["scored", "skipped"]),
         isNull(candidates.opusProjectId),
         // `forced` bypasses the score gate: the operator picked this video out of /found by hand,
         // which is a direct request. Without the OR, the override would set a flag nothing reads.
