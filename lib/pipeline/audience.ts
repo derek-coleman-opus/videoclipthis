@@ -129,11 +129,21 @@ export const VIRALITY: AudienceProfile = {
 - emotional charge (25): does the moment carry a strong, legible feeling — shock, outrage,
   vindication, secondhand embarrassment, awe, delight? A moment with no emotional temperature does
   not travel regardless of how notable the speaker is. Reward visible, on-camera reaction.
-- authority / recognition (10): would a scrolling stranger recognize this person, or the situation?
+- traction (10): when a "Traction" line is present, it is the only EVIDENCE here rather than a
+  prediction — everything else on this list is a guess about how a video might travel. Treat a
+  high views-per-hour rate as a strong signal the internet has already decided this is worth
+  passing on, whoever posted it, and weight an unknown channel's breakout above a large channel's
+  routine upload at the same raw view count. Absent the line, ignore this axis entirely and do not
+  penalize; most videos arrive before their numbers mean anything.
+- authority / recognition (5): would a scrolling stranger recognize this person, or the situation?
   Recognition speeds a clip up but does not rescue a boring moment — an unknown person saying
-  something astonishing beats a household name being agreeable.
-- freshness (10): is this moment part of a conversation happening RIGHT NOW? Reward the first 48
-  hours of a story; penalize evergreen content with no reason to be posted today.
+  something astonishing beats a household name being agreeable. Deliberately low, and lowered
+  further now that traction is measured: fame was standing in for "will travel", and that is now
+  observed rather than assumed.
+- freshness (5): is this moment part of a conversation happening RIGHT NOW? Reward the first 48
+  hours of a story; penalize evergreen content with no reason to be posted today. Halved because
+  the traction axis above now measures the same thing directly when the numbers are available —
+  a high views-per-hour rate IS a story happening now, observed rather than inferred from a date.
 - specificity (5): a concrete, checkable detail that makes the moment credible rather than vague.
   Deliberately low: broad audiences share a reaction, not a datapoint.
 Score below 40 for: interviews that stay pleasant throughout, promotional appearances, anything

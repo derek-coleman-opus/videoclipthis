@@ -12,6 +12,14 @@ export interface DetectedCandidate {
   durationS?: number;
   publishedAt?: Date | null;
   signalStrength?: number;
+  /** Observed traction, straight from YouTube. The whole point of a virality strategy is to catch
+   *  a video while it is taking off, and nothing else in this pipeline can see that: the scorer
+   *  judges shareability from the title and transcript alone, which is a guess about how a video
+   *  MIGHT travel, not evidence that it IS travelling. */
+  viewCount?: number;
+  /** Views per hour since publication. The signal that finds an unknown account going viral —
+   *  a 6-hour-old video at 40k views is exploding; the same 40k over three weeks is not. */
+  viewsPerHour?: number;
   transcript?: string;
   figureName?: string;   // set when a tracked key AI figure is matched (figures.ts)
 }
