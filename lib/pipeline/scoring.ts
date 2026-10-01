@@ -63,6 +63,13 @@ export function claudeScorer(
         `Channel: ${c.channel ?? ""}`,
         `Speaker: ${c.speaker ?? ""}${c.figureName ? ` (tracked figure: ${c.figureName})` : ""}`,
         `Duration(s): ${c.durationS ?? 0}`,
+        // OBSERVED TRACTION, not a guess. Everything else here is text the model reasons about to
+        // predict how a video MIGHT travel; this is evidence of how it IS travelling. Omitted
+        // entirely when unknown rather than sent as 0, so the model never reads a missing
+        // statistic as a dead video.
+        ...(c.viewsPerHour
+          ? [`Traction: ${c.viewCount?.toLocaleString() ?? "?"} views, ~${c.viewsPerHour.toLocaleString()}/hour since publication`]
+          : []),
         `Transcript:\n${(c.transcript ?? "").slice(0, 12000)}`,
       ].join("\n");
       const data: any = await withRetry(async () => {

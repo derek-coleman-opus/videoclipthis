@@ -15,6 +15,11 @@ const STALL_POST_H = Number(process.env.STALL_POST_H ?? 24);
  *  slots, which silently halts all new submissions. */
 const STUCK_RENDER_H = Number(process.env.STUCK_RENDER_H ?? 5);
 
+/** How far back to look for REFUSED submissions. Short, because this is the one fault that a
+ *  healthy-looking queue actively hides: both crons run every 30 min, so two hours is several
+ *  chances to have failed. */
+const SUBMIT_FAIL_WINDOW_H = Number(process.env.SUBMIT_FAIL_WINDOW_H ?? 2);
+
 export interface HealthReport {
   ok: boolean;
   stalled: boolean;
@@ -133,6 +138,33 @@ export async function computeHealth(): Promise<HealthReport> {
       "the render queue is EMPTY — nothing is scored, rendering or collecting, so no clip can be "
       + "produced no matter how healthy everything else looks. Either nothing passes the score "
       + "threshold or the backlog was stranded",
+    );
+  }
+
+  // SUBMISSIONS BEING REFUSED. A full queue is not health. OpusClip can reject every create call
+  // — 402 out of render budget, 403 the account refused as datacenter egress — while candidates
+  // pile up behind it untouched. This check exists because the first version of this file did not
+  // have it: it treated a non-empty render queue as fine and reported a cheerful green "Pipeline
+  // healthy — 46 in the render queue" through an outage in which not one submission had succeeded
+  // for five days. That is precisely the failure this whole module was written to make impossible,
+  // reproduced inside the module itself.
+  //
+  // The "Render submit failed" prefix is written by runScout's account-block branch and is
+  // load-bearing there too (diagnostics counts it the same way). Keep them in step.
+  const submitFailures = Number((await database.select({ n: one }).from(events)
+    .where(and(
+      eq(events.type, "error"),
+      gte(events.createdAt, new Date(Date.now() - SUBMIT_FAIL_WINDOW_H * 36e5)),
+      sql`${events.message} LIKE 'Render submit failed%'`,
+    )))[0]?.n ?? 0);
+  pipeline.submitFailures = submitFailures;
+  if (submitFailures > 0) {
+    problems.push(
+      `STALLED: ${submitFailures} render submission(s) REFUSED by OpusClip in the last `
+      + `${SUBMIT_FAIL_WINDOW_H}h — nothing can enter the render queue no matter how full it looks. `
+      + `402 means the plan's render budget is gone, which is a DIFFERENT meter from the API cap and `
+      + `can sit next to a healthy-looking one; 403 means the account is being refused as datacenter `
+      + `egress. Neither is fixable in code — check the account.`,
     );
   }
 

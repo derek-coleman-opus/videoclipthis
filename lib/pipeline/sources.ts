@@ -1,4 +1,4 @@
-import { WATCHLIST, MAX_AGE_HOURS } from "./config";
+import { WATCHLIST, MAX_AGE_HOURS, SEARCH_RESULTS_PER_TERM } from "./config";
 import { type Figure } from "./figures";
 import type { DetectedCandidate } from "./types";
 import { withRetry } from "./util";
@@ -11,6 +11,37 @@ export interface Source {
 
 const YT_API = "https://www.googleapis.com/youtube/v3";
 const LONG_FORM_MIN_S = 8 * 60; // ignore anything shorter than ~8 min
+
+/** Views per hour since publication, and a 0-1 signal derived from it.
+ *
+ *  Absolute view count rewards old videos and big channels, which is exactly the bias that made
+ *  the watchlist too narrow: a known channel's week-old upload outranks an unknown account's
+ *  video doing 30k in its first three hours. Rate does not care who posted it. The log scale keeps
+ *  a genuine outlier from saturating the signal — 1k/h and 100k/h should not look identical. */
+/** Traction fields for a raw YouTube `videos` item. `floor` is the old hard-coded
+ *  signalStrength, kept as a lower bound so a channel upload with statistics hidden is not
+ *  ranked below one with a genuinely poor view rate. */
+function tractionFields(v: any, publishedAtRaw: string | undefined, floor: number) {
+  const views = Number(v?.statistics?.viewCount ?? 0);
+  const published = publishedAtRaw ? new Date(publishedAtRaw) : null;
+  const t = traction(views, published);
+  return {
+    viewCount: views || undefined,
+    viewsPerHour: t.viewsPerHour || undefined,
+    signalStrength: Math.max(floor, t.signal),
+  };
+}
+
+export function traction(viewCount: number, publishedAt: Date | null): { viewsPerHour: number; signal: number } {
+  if (!Number.isFinite(viewCount) || viewCount <= 0) return { viewsPerHour: 0, signal: 0 };
+  // Floor the age at one hour: a video minutes old would otherwise divide to a fake spike.
+  const hours = Math.max(1, publishedAt ? (Date.now() - publishedAt.getTime()) / 36e5 : Number.POSITIVE_INFINITY);
+  if (!Number.isFinite(hours)) return { viewsPerHour: 0, signal: 0 };
+  const vph = viewCount / hours;
+  // 10 views/h ~ 0, 10k/h ~ 1. Clamped, so the signal stays comparable across niches.
+  const signal = Math.max(0, Math.min(1, (Math.log10(vph) - 1) / 3));
+  return { viewsPerHour: Math.round(vph), signal: Number(signal.toFixed(3)) };
+}
 
 async function ytGet(path: string, params: Record<string, string>, apiKey: string): Promise<any> {
   const url = new URL(`${YT_API}/${path}`);
@@ -52,7 +83,7 @@ async function recentUploads(channelId: string, apiKey: string): Promise<Detecte
   const pl = await ytGet("playlistItems", { part: "contentDetails", playlistId: uploads, maxResults: "10" }, apiKey);
   const ids: string[] = (pl.items ?? []).map((it: any) => it.contentDetails?.videoId).filter(Boolean);
   if (!ids.length) return [];
-  const vids = await ytGet("videos", { part: "snippet,contentDetails", id: ids.join(",") }, apiKey);
+  const vids = await ytGet("videos", { part: "snippet,contentDetails,statistics", id: ids.join(",") }, apiKey);
   const cutoff = Date.now() - MAX_AGE_HOURS * 3600 * 1000;
   const out: DetectedCandidate[] = [];
   for (const v of vids.items ?? []) {
@@ -73,7 +104,7 @@ async function recentUploads(channelId: string, apiKey: string): Promise<Detecte
       channel: v.snippet?.channelTitle ?? "",
       durationS: dur,
       publishedAt: published,
-      signalStrength: 0.5,
+      ...tractionFields(v, v.snippet?.publishedAt, 0.5),
       // Real captions when available; falls back to the description so the scorer always has signal.
       transcript: await transcriptOrDescription(v.id, v.snippet?.description ?? ""),
     });
@@ -90,7 +121,7 @@ async function searchFigureVideos(figure: Figure, apiKey: string, cutoffISO: str
   }, apiKey);
   const ids: string[] = (s.items ?? []).map((it: any) => it.id?.videoId).filter(Boolean);
   if (!ids.length) return [];
-  const vids = await ytGet("videos", { part: "snippet,contentDetails", id: ids.join(",") }, apiKey);
+  const vids = await ytGet("videos", { part: "snippet,contentDetails,statistics", id: ids.join(",") }, apiKey);
   const lastName = (figure.name.split(" ").pop() ?? figure.name).toLowerCase();
   const out: DetectedCandidate[] = [];
   for (const v of vids.items ?? []) {
@@ -109,7 +140,7 @@ async function searchFigureVideos(figure: Figure, apiKey: string, cutoffISO: str
       channel: v.snippet?.channelTitle ?? "",
       durationS: dur,
       publishedAt: v.snippet?.publishedAt ? new Date(v.snippet.publishedAt) : null,
-      signalStrength: 0.6,
+      ...tractionFields(v, v.snippet?.publishedAt, 0.6),
       figureName: figure.name,
       transcript: await transcriptOrDescription(v.id, v.snippet?.description ?? ""),
     });
@@ -121,12 +152,17 @@ async function searchFigureVideos(figure: Figure, apiKey: string, cutoffISO: str
  *  front — runScout's matchFigure may still resolve one from the title; otherwise it's held. */
 async function searchTopicVideos(topic: string, apiKey: string, cutoffISO: string): Promise<DetectedCandidate[]> {
   const s = await ytGet("search", {
-    part: "snippet", q: topic, type: "video", order: "date",
-    publishedAfter: cutoffISO, maxResults: "5", relevanceLanguage: "en",
+    part: "snippet", q: topic, type: "video",
+    // ORDER BY VIEWS, NOT DATE. "date" returns whatever was uploaded most recently for a keyword,
+    // which is essentially a random sample — a video nobody watched ranks level with one that is
+    // exploding. Within the recency window, viewCount surfaces what is actually travelling, and
+    // it does so regardless of who posted it. This is the query that finds an unknown account.
+    order: "viewCount",
+    publishedAfter: cutoffISO, maxResults: String(SEARCH_RESULTS_PER_TERM), relevanceLanguage: "en",
   }, apiKey);
   const ids: string[] = (s.items ?? []).map((it: any) => it.id?.videoId).filter(Boolean);
   if (!ids.length) return [];
-  const vids = await ytGet("videos", { part: "snippet,contentDetails", id: ids.join(",") }, apiKey);
+  const vids = await ytGet("videos", { part: "snippet,contentDetails,statistics", id: ids.join(",") }, apiKey);
   const out: DetectedCandidate[] = [];
   for (const v of vids.items ?? []) {
     const dur = parseDuration(v.contentDetails?.duration ?? "PT0S");
@@ -141,7 +177,7 @@ async function searchTopicVideos(topic: string, apiKey: string, cutoffISO: strin
       channel: v.snippet?.channelTitle ?? "",
       durationS: dur,
       publishedAt: v.snippet?.publishedAt ? new Date(v.snippet.publishedAt) : null,
-      signalStrength: 0.4,
+      ...tractionFields(v, v.snippet?.publishedAt, 0.4),
       transcript: await transcriptOrDescription(v.id, v.snippet?.description ?? ""),
     });
   }
@@ -289,7 +325,7 @@ export async function youtubeChannelReport(
       const pl = await ytGet("playlistItems", { part: "contentDetails", playlistId: uploads, maxResults: "10" }, apiKey);
       const ids: string[] = (pl.items ?? []).map((it: any) => it.contentDetails?.videoId).filter(Boolean);
       if (!ids.length) { rep.error = "uploads playlist empty"; reports.push(rep); continue; }
-      const vids = await ytGet("videos", { part: "snippet,contentDetails", id: ids.join(",") }, apiKey);
+      const vids = await ytGet("videos", { part: "snippet,contentDetails,statistics", id: ids.join(",") }, apiKey);
       rep.rawUploads = (vids.items ?? []).length;
       for (const v of vids.items ?? []) {
         const dur = parseDuration(v.contentDetails?.duration ?? "PT0S");

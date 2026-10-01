@@ -79,6 +79,13 @@ export const MIN_CLIP_POST_GAP_MIN = Number(process.env.MIN_CLIP_POST_GAP_MIN ??
  *  weeks, so a tight 48h window starves the pipeline. Lower via MAX_AGE_HOURS for first-to-clip. */
 export const MAX_AGE_HOURS = Number(process.env.MAX_AGE_HOURS ?? 168);
 
+/** Results per search term. Was hard-coded to 5 and ordered by upload date, which sampled the
+ *  keyword almost at random. Ordered by view count instead, a wider window is what actually finds
+ *  the breakout video from an account nobody is watching — the top 5 by views inside a 7-day
+ *  window is a thin slice of a busy topic. Each search.list call costs 100 quota units regardless
+ *  of maxResults, so widening this is free; it is the number of TERMS per burst that costs. */
+export const SEARCH_RESULTS_PER_TERM = Number(process.env.SEARCH_RESULTS_PER_TERM ?? 15);
+
 /** YouTube search.list costs 100 quota units per call, so figure searches (one per tracked
  *  figure) burn quota fast at a 30-min scout cadence. Only run them every N hours. */
 export const FIGURE_SEARCH_INTERVAL_H = Number(process.env.FIGURE_SEARCH_INTERVAL_H ?? 6);
