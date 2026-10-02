@@ -11,7 +11,7 @@
 // project's renders, picks the best, writes the pull quote, and vetoes clips too boring to post.
 // A vetoed clip is queued for review, never deleted — the render is already paid for.
 
-import { and, desc, eq, gte, isNotNull, isNull, lt, or } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { db, candidates, clips, summonRequests, type Candidate, type Clip, type Settings } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import { findProfile } from "./audience";
@@ -25,7 +25,7 @@ import {
 import { topPullQuotes } from "./feedback";
 import { composePost, composeSummonReply, followUpText } from "./production";
 import { publishProvablyNotPosted, xPublisher } from "./publishing";
-import { hasXEnv } from "./env";
+import { hasXEnv, missingXEnv } from "./env";
 import { logEvent } from "./events";
 import { slog } from "./util";
 import type { DetectedCandidate, Moment } from "./types";
@@ -340,8 +340,22 @@ export async function collectRenders(): Promise<CollectResult> {
  *  account reads curated rather than firehose. Runs on every scout (30m) and summon (5m)
  *  cycle, so held-back clips drip out on their own. No-ops without X credentials. */
 export async function drainApprovedClips(cfg?: Settings): Promise<number> {
-  if (!hasXEnv()) return 0;
   const database = db();
+  // NO CREDENTIALS WAS A SILENT ZERO. Every cycle returned 0 and logged nothing, so a missing or
+  // expired X key looked exactly like an empty queue — the pipeline rendered, approved and queued
+  // clips indefinitely while the one fact that explained it was never written down anywhere.
+  // Reported only when something is actually waiting, so an idle pipeline stays quiet.
+  if (!hasXEnv()) {
+    const waiting = Number((await database.select({ n: sql<number>`count(*)::int` })
+      .from(clips).where(eq(clips.status, "approved")))[0]?.n ?? 0);
+    if (waiting > 0) {
+      await logEvent("error",
+        `Posting is disabled — X credentials are missing or incomplete (${missingXEnv().join(", ")}), `
+        + `so ${waiting} approved clip(s) cannot publish. Nothing is wrong with the clips; set the `
+        + `variables in Vercel and they drain on the next cycle.`);
+    }
+    return 0;
+  }
   const settings = cfg ?? (await getSettings());
 
   const queue = await database
@@ -368,18 +382,25 @@ export async function drainApprovedClips(cfg?: Settings): Promise<number> {
     // "Run Scout now" can overlap either — so a plain select-then-publish let two runs pick up the
     // same approved clip and post it twice. This compare-and-swap is atomic: exactly one caller
     // gets the row, everyone else sees zero rows and moves on.
-    const claimed = await database.update(clips)
-      .set({ status: "posting" })
-      .where(and(eq(clips.id, clip.id), eq(clips.status, "approved")))
-      .returning({ id: clips.id });
-    if (!claimed.length) continue; // another run already has it
-
+    // GATES FIRST, THEN CLAIM. These were the other way round, and the cost was severe: the clip
+    // was flipped to "posting", the cap or pacing check then hit `break`, and the claim was never
+    // released. Nothing selects "posting", so the clip was stranded — and the stale-claim sweep
+    // above later moved it to "unverified" with "the publish was interrupted and its outcome is
+    // unknown", telling the operator to check the timeline for a post that was never attempted.
+    // One clip per cycle went quietly into that dead end instead of waiting its turn.
+    // A claim is only worth taking for a clip actually about to publish.
     const isSummon = clip.kind === "summon";
     if (!isSummon) {
       if (scoutPostedToday >= settings.dailyClipCap) break; // cap reached — rest wait for tomorrow
       const gapMs = MIN_CLIP_POST_GAP_MIN * 60 * 1000;
       if (lastPostedAt && Date.now() - lastPostedAt < gapMs) break; // paced — next cycle picks it up
     }
+
+    const claimed = await database.update(clips)
+      .set({ status: "posting" })
+      .where(and(eq(clips.id, clip.id), eq(clips.status, "approved")))
+      .returning({ id: clips.id });
+    if (!claimed.length) continue; // another run already has it
 
     try {
       const res = await xPublisher().publish(
