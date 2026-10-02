@@ -263,7 +263,7 @@ export async function collectRenders(): Promise<CollectResult> {
       // human). Manual review-mode clips skip it — the human approval IS the screen.
       let holdReason = "";
       if (autoPost) {
-        const screen = await screenClipForAutoPost(row.title, moment.hookCaption, postText);
+        const screen = await screenClipForAutoPost(row.title, moment.hookCaption, postText, profile.guardrails);
         if (!screen.allow) {
           autoPost = false;
           holdReason = screen.reason;
