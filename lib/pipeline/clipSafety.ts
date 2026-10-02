@@ -223,12 +223,43 @@ export async function screenSummonTarget(
   }
 }
 
-const POST_SCREEN_PROMPT = `You are a brand-safety gate for a video clip that an automated bot is
-about to post publicly on X with NO human review. Judge from the clip's title/caption and post text.
-It is NOT safe if it contains or clearly relates to: adult/sexual content, graphic violence, hate or
-harassment, self-harm, shock content, or anything that would read as the bot mocking or piling onto
-someone. Normal tech talks, demos, interviews, and insights are safe. When unsure, answer not safe.
+/** The screen's policy, built from the ACTIVE PROFILE's guardrails rather than hard-coded.
+ *
+ *  The previous version of this prompt was written for the AI/developer profile and said so:
+ *  it whitelisted "normal tech talks, demos, interviews" and refused anything reading as "shock
+ *  content" or as "piling onto someone". That is a coherent policy for conference talks and a
+ *  total blockade for the virality profile, whose rubric is explicitly instructed to find "a
+ *  confrontation, challenge, or interruption", "a stunning admission", and moments carrying
+ *  "shock, outrage, vindication, secondhand embarrassment".
+ *
+ *  So the pipeline was selecting for exactly what this gate refused. Every clip failed here,
+ *  landed in pending_review, and nothing posted — while renders kept completing and being paid
+ *  for. Two subsystems with opposite objectives and no shared definition of the line.
+ *
+ *  The profile already states the real policy in its own guardrails, so this now asks for THAT
+ *  rather than a second, contradictory one. The harm categories below are unchanged and
+ *  non-negotiable; what changed is that disagreement between public figures is no longer treated
+ *  as harm. "Unsure → not safe" and the fail-closed catch below both stay. */
+function postScreenPrompt(guardrails: string[]): string {
+  return `You are a brand-safety gate for a video clip that an automated bot is about to post
+publicly on X with NO human review. Judge from the clip's title/caption and post text.
+
+It is NOT safe if it contains or clearly relates to:
+- adult or sexual content
+- graphic violence, injury, death, disaster, or crime victims
+- hate speech, or harassment, humiliation or mockery of a PRIVATE individual — anyone who did not
+  choose to be on camera
+- self-harm
+- any moment whose appeal depends on someone's tragedy
+
+It IS safe for public figures speaking publicly to disagree, argue, confront each other, criticise
+each other, make bold or embarrassing claims, or react strongly. That is ordinary public discourse,
+not harm, and refusing it would refuse the entire category this account exists to cover. Ordinary
+talks, demos, interviews and insights are likewise safe.
+${guardrails.length ? `\nThe account's own editorial guardrails, which are authoritative here:\n${guardrails.map((g) => `- ${g}`).join("\n")}\n` : ""}
+When genuinely unsure, answer not safe.
 Return JSON: {"safe": true|false, "reason": "<short>"}.`;
+}
 
 /** Final screen before an UNATTENDED post (summon auto-reply or autonomy=auto scout post).
  *  Judges the clip's own text signals. Fail-safe: errors → hold for human review. */
@@ -236,13 +267,14 @@ export async function screenClipForAutoPost(
   videoTitle: string,
   hookCaption: string,
   postText: string,
+  guardrails: string[] = [],
 ): Promise<SafetyVerdict> {
   if (NSFW_RE.test(`${videoTitle} ${hookCaption} ${postText}`)) {
     return { allow: false, reason: "clip text matches adult-content filter" };
   }
   try {
     return await claudeVerdict(
-      POST_SCREEN_PROMPT,
+      postScreenPrompt(guardrails),
       [
         videoTitle ? `Source video title: ${videoTitle}` : "",
         hookCaption ? `Clip caption/hook: ${hookCaption}` : "",
