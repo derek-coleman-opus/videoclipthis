@@ -48,6 +48,11 @@ export function hasXEnv(): boolean {
   return missing(X_REQUIRED).length === 0;
 }
 
+/** Which X variables are absent, so the posting drain can say so instead of failing silently. */
+export function missingXEnv(): string[] {
+  return missing(X_REQUIRED);
+}
+
 /** Reading tweet metrics / mentions needs a bearer token. */
 export function requireXReadEnv(): void {
   requireEnv(["X_BEARER_TOKEN"], "reading from X");
