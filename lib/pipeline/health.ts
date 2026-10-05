@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
 import { db, candidates, clips, events, runs } from "@/lib/db";
 import { withSchemaHeal } from "@/lib/db/ensureSchema";
+import { getSettings } from "@/lib/settings";
 
 /** Hours without a COMPLETED run before the pipeline counts as stalled. Both crons fire every
  *  30 minutes, so anything past a couple of hours means runs are dying, not merely idle. */
@@ -110,6 +111,36 @@ export async function computeHealth(): Promise<HealthReport> {
       + `${hSincePost === null ? "ever" : `${hSincePost}h`} — the posting drain is not draining`,
     );
   }
+  // CLIPS HELD IN REVIEW. This was the one state the whole module could not see, and it is the
+  // state that produces the exact symptom it exists to explain: renders complete, clips are made,
+  // the queue grows, and nothing posts — forever, with every other check green.
+  //
+  // autonomy defaults to "review" in the schema, and collectRenders reads it as
+  // `autoPost = isSummonRow || cfg.autonomy === "auto"`. In review mode EVERY scout clip is written
+  // as pending_review, so the posting drain's queue is empty by construction. Nothing was wrong,
+  // nothing was logged as wrong, and the approved-waiting check above cannot fire because there is
+  // never anything approved to wait.
+  const inReview = Number((await database.select({ n: one }).from(clips)
+    .where(eq(clips.status, "pending_review")))[0]?.n ?? 0);
+  const autonomy = (await getSettings()).autonomy;
+  pipeline.clipsInReview = inReview;
+  pipeline.autonomy = autonomy;
+
+  if (inReview > 0 && autonomy !== "auto") {
+    problems.push(
+      `${inReview} clip(s) are waiting in review and will NEVER post on their own — autonomy is `
+      + `"${autonomy}", so every scout clip is written as pending_review by design. This is a `
+      + `SETTING, not a fault: approve them from /posts, or switch autonomy to "auto" at /settings `
+      + `if the pipeline is meant to run unattended.`,
+    );
+  } else if (inReview > 0 && hSincePost !== null && hSincePost >= STALL_POST_H) {
+    problems.push(
+      `${inReview} clip(s) are in review while autonomy is "auto" — they were held by the editorial `
+      + `veto or the safety screen rather than by the setting, and nothing has posted in ${hSincePost}h. `
+      + `Each clip's reason is on its row in /posts.`,
+    );
+  }
+
   if (unverified > 0) {
     problems.push(
       `${unverified} clip(s) in 'unverified' — a publish outcome was ambiguous and needs a human to `
