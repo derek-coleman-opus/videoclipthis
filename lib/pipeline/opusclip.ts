@@ -244,7 +244,24 @@ function normalizeClip(c: any): OpusClipResult {
     endS: durationS,
     score: Number(c.score ?? c.judgeResult?.hookScore ?? 0),
     caption: String(c.title ?? c.description ?? ""),
-    clipUrl: String(c.uriForExport ?? c.export_url ?? ""),
+    // THE RENDERED FILE'S URL, under every name OpusClip has used for it.
+    //
+    // This read `uriForExport ?? export_url` only. Neither is populated on a freshly generated
+    // clip: the API lists clips with a PREVIEW url and treats the export as a second, explicit
+    // step ("Preview-only by design; for the HD file use export_clip"). So clipUrl was "" for
+    // every clip, `done` was never true, and collectRenders retried each candidate until it
+    // expired and recorded "Render timed out (no clips after 2h)" — against projects that had
+    // seventeen finished, scored, portrait clips sitting in them. No clip row was ever written,
+    // which is why nothing reached the review queue, let alone X.
+    //
+    // The preview is a real, playable, correctly-cropped MP4, so it is a usable fallback. Its
+    // signed URL is short-lived, which is fine because it is fetched and uploaded immediately,
+    // but an explicit export is the better source if the account's plan offers it — see the
+    // integration note logged by render.ts when a project yields clips with no URL at all.
+    clipUrl: String(
+      c.uriForExport ?? c.export_url ?? c.exportUrl
+      ?? c.previewUrl ?? c.preview_url ?? c.videoUrl ?? c.video_url ?? "",
+    ),
     costUsd: 0,
     renderPending: Boolean(c.renderAsVideoFile?.pending ?? false),
   };
