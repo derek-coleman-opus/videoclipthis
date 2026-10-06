@@ -131,9 +131,13 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   // Render backpressure: OpusClip caps concurrent projects, so only submit up to the number of
   // free slots. Candidates that pass the gate but can't fit are left "scored" and submitted on a
   // later run (drained newest-best-first below) — never over-submitted and burned.
+  // "collecting" counts too. It is a transient claim held by collectRenders(), but a run killed
+  // mid-collect (serverless timeout, deploy) leaves rows parked there for up to COLLECT_CLAIM_TTL_MIN.
+  // Counting only "rendering" treated those as free capacity and over-submitted past the concurrent
+  // limit OpusClip actually enforces — paying for renders the API was about to refuse.
   const inFlight = Number(
     (await database.select({ n: sql<number>`count(*)::int` })
-      .from(candidates).where(eq(candidates.status, "rendering")))[0]?.n ?? 0,
+      .from(candidates).where(inArray(candidates.status, ["rendering", "collecting"])))[0]?.n ?? 0,
   );
   // Hardening caps, enforced at SUBMIT time — because that is when OpusClip bills, at roughly
   // 1 credit per minute of source video. Posting caps (dailyClipCap + pacing) throttle output;
@@ -159,6 +163,15 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   ));
   if (slots === 0 && rendersToday >= dailySubmitCap) {
     await logEvent("run", `Daily render-submit cap reached (${rendersToday}/${dailySubmitCap}) — no new renders today`);
+  } else if (slots === 0 && inFlight >= MAX_CONCURRENT_RENDERS) {
+    // THE SILENT HALT. This branch logged nothing, and it is the one that actually stops the
+    // pipeline: MAX_CONCURRENT_RENDERS rows wedged in "rendering" means every submit below is
+    // skipped — the backlog drain included — on every run, forever, with no output anywhere.
+    // It is indistinguishable from "nothing worth clipping today" unless it says so.
+    await logEvent("error",
+      `No render slots: ${inFlight}/${MAX_CONCURRENT_RENDERS} are in flight and none finished, so `
+      + `NOTHING was submitted this run. If this repeats, those renders are wedged rather than slow `
+      + `— re-collect or fail them from the dashboard, or the pipeline cannot move.`);
   }
   if (slots > 0 && sourceMinutesToday >= DAILY_SOURCE_MINUTES_CAP) {
     slots = 0;
@@ -218,13 +231,20 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
 
     // Per-video ceiling. The daily cap above is an AGGREGATE and says nothing about one request:
     // OpusClip prices and refuses per video, so a single over-long source is rejected outright no
-    // matter how much daily budget is left. Leave it queued rather than failing it — the ceiling
-    // is an account-balance judgement, not a verdict on the video.
+    // matter how much daily budget is left.
+    //
+    // HELD, not left queued. "Queued" was a lie: the ceiling is a fixed constant, not a balance
+    // that recovers overnight, so the row was re-selected by the backlog drain on EVERY run,
+    // re-logged every 30 minutes forever, never submitted and never resolved — while still counting
+    // toward health's renderableQueue, so health reported a healthy supply made of rows that could
+    // not move. "held" is the state that already means "needs a human decision", it is excluded
+    // from the drain, and /api/admin/release-held is the way back once the ceiling is raised.
     if (minutes > MAX_SOURCE_MINUTES_PER_VIDEO) {
-      queued++;
-      await logEvent("scored",
-        `Queued — ${Math.round(minutes)} min source exceeds the ${MAX_SOURCE_MINUTES_PER_VIDEO} min `
-        + `per-video ceiling (OpusClip charges and refuses per video): ${c.title}`,
+      await database.update(candidates).set({ status: "held" }).where(eq(candidates.id, c.id));
+      await logEvent("held",
+        `HELD — ${Math.round(minutes)} min source exceeds the ${MAX_SOURCE_MINUTES_PER_VIDEO} min `
+        + `per-video ceiling (OpusClip charges and refuses per video): ${c.title}. Raise `
+        + `MAX_SOURCE_MINUTES_PER_VIDEO and release it from /api/admin/release-held to clip it.`,
         "candidates", c.id);
       return;
     }

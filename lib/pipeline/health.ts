@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, lt, sql } from "drizzle-orm";
 import { db, candidates, clips, events, runs } from "@/lib/db";
 import { withSchemaHeal } from "@/lib/db/ensureSchema";
 import { getSettings } from "@/lib/settings";
@@ -200,10 +200,15 @@ export async function computeHealth(): Promise<HealthReport> {
   }
 
   // Recent errors, truncated. These are the pipeline's own messages, never credentials.
-  const recent = await database.select({ message: events.message, createdAt: events.createdAt })
-    .from(events).where(eq(events.type, "error")).orderBy(desc(events.createdAt)).limit(5);
+  //
+  // xbot writes its failures as type "xbot_error", not "error", so an xbot outage was invisible to
+  // every error query in the app — including this one. Tagged rather than merged silently, so the
+  // operator can tell which half of the system is complaining.
+  const recent = await database.select({ message: events.message, type: events.type, createdAt: events.createdAt })
+    .from(events).where(inArray(events.type, ["error", "xbot_error"]))
+    .orderBy(desc(events.createdAt)).limit(5);
   pipeline.recentErrors = recent.map((e) => ({
-    message: (e.message ?? "").slice(0, 300),
+    message: `${e.type === "xbot_error" ? "[xbot] " : ""}${(e.message ?? "").slice(0, 300)}`,
     at: e.createdAt,
   }));
 
