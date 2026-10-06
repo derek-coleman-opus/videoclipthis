@@ -175,8 +175,13 @@ export async function collectRenders(): Promise<CollectResult> {
 
       let clipsReady: OpusClipResult[] = [];
       let done = false;
+      // How many clips the project actually returned, before the URL filter. A project that
+      // returns clips none of which carry a URL is an INTEGRATION failure, not a slow render, and
+      // the two were indistinguishable in the log below.
+      let returnedClips = 0;
       try {
         const res = await opusclipFetchClips(row.opusProjectId as string, apiKey, base);
+        returnedClips = res.clips.length;
         clipsReady = res.clips.filter((c) => c.clipUrl && !c.renderPending).sort((a, b) => b.score - a.score);
         done = res.done;
       } catch (e) {
@@ -196,7 +201,19 @@ export async function collectRenders(): Promise<CollectResult> {
       if (!done && !(expired && clipsReady.length)) {
         if (expired) {
           await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, row.id));
-          await logEvent("error", `Render timed out (no clips after ${RENDER_TIMEOUT_H}h): ${row.title}`, "candidates", row.id);
+          // "Timed out" was a lie whenever the project HAD clips: OpusClip had finished, and the
+          // only thing missing was a URL this client knew how to read. Say which it is, because
+          // one is a slow render and the other is a contract mismatch that will repeat on every
+          // candidate forever.
+          await logEvent("error",
+            returnedClips > 0
+              ? `OpusClip returned ${returnedClips} clip(s) for "${row.title}" but NONE carried a `
+                + `usable video URL, so nothing could be collected — this is an API contract `
+                + `mismatch, not a slow render, and it will repeat on every candidate until the `
+                + `field this client reads matches what the API sends. Inspect the raw response at `
+                + `/api/debug/opusclip?projectId=${row.opusProjectId}.`
+              : `Render timed out (no clips after ${RENDER_TIMEOUT_H}h): ${row.title}`,
+            "candidates", row.id);
           failed++;
         } else {
           // Release the claim so the next run picks it up again.
