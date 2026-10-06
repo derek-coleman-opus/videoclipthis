@@ -16,7 +16,7 @@ import { db, candidates, clips, summonRequests, type Candidate, type Clip, type 
 import { getSettings } from "@/lib/settings";
 import { findProfile } from "./audience";
 import { MIN_CLIP_POST_GAP_MIN } from "./config";
-import { opusclipFetchClips, type OpusClipResult } from "./opusclip";
+import { opusclipExportClip, opusclipFetchClips, type OpusClipResult } from "./opusclip";
 import { crossPostClip } from "./crosspost";
 import { screenClipForAutoPost } from "./clipSafety";
 import {
@@ -30,8 +30,13 @@ import { logEvent } from "./events";
 import { slog } from "./util";
 import type { DetectedCandidate, Moment } from "./types";
 
-/** Give a render this long AFTER SUBMISSION before declaring it dead. */
-const RENDER_TIMEOUT_H = Number(process.env.RENDER_TIMEOUT_H ?? 2);
+/** Give a render this long AFTER SUBMISSION before declaring it dead.
+ *
+ *  Covers TWO stages, which is why it is no longer 2h: OpusClip renders the clips, and then the
+ *  clip the editor picks is exported on demand (see opusclipExportClip). An export that is still
+ *  rendering defers the candidate to the next collect cycle, up to 30 minutes later, so a budget
+ *  sized for the first stage alone could expire a candidate that was progressing normally. */
+const RENDER_TIMEOUT_H = Number(process.env.RENDER_TIMEOUT_H ?? 4);
 
 /** How long a "collecting" claim may be held before it is assumed stranded and released.
  *  A real collect takes seconds (one OpusClip check + one editor call); this is far above that and
@@ -94,13 +99,16 @@ function toDetected(row: Candidate): DetectedCandidate {
   };
 }
 
-function toMoment(best: OpusClipResult): Moment {
+/** `url` is passed in rather than read off the clip because the clip carries TWO urls with very
+ *  different lifetimes (a durable export and a short-lived preview) and the choice between them is
+ *  the caller's, made explicitly and logged. Burying it in here is how the wrong one gets persisted. */
+function toMoment(best: OpusClipResult, url: string): Moment {
   return {
     startS: best.startS,
     endS: best.endS,
     hookCaption: best.caption || "the moment worth watching",
     confidence: Math.min(1, best.score / 100),
-    clipUrl: best.clipUrl,
+    clipUrl: url,
     costUsd: best.costUsd,
   };
 }
@@ -204,7 +212,12 @@ export async function collectRenders(): Promise<CollectResult> {
       try {
         const res = await opusclipFetchClips(row.opusProjectId as string, apiKey, base);
         returnedClips = res.clips.length;
-        clipsReady = res.clips.filter((c) => c.clipUrl && !c.renderPending).sort((a, b) => b.score - a.score);
+        // "Ready to judge" is a FINISHED RENDER, which means a preview exists — the export has not
+        // been requested yet at this point and never appears on its own. Filtering on clipUrl here
+        // (export-only) left clipsReady permanently empty, which is the outage.
+        clipsReady = res.clips
+          .filter((c) => (c.clipUrl || c.previewUrl) && !c.renderPending)
+          .sort((a, b) => b.score - a.score);
         done = res.done;
       } catch (e) {
         // Transient check failure: leave it rendering unless it's already stale. Releasing the claim
@@ -271,7 +284,50 @@ export async function collectRenders(): Promise<CollectResult> {
         })),
       });
       const chosen = clipsReady[verdict?.pick ?? 0] ?? clipsReady[0];
-      const moment = toMoment(chosen);
+
+      // EXPORT THE ONE CLIP WE ARE ABOUT TO POST. Clips are preview-only until exported, and the
+      // preview's signed URL dies in about a day — fine for an immediate upload to X, fatal for
+      // clips.clipUrl, which the public /clips, /clips/[id], /speakers/[slug] and /posts pages
+      // replay as a <video src> indefinitely. Exporting here rather than in the fetch loop means
+      // one export per POSTED clip instead of one per clip in the project.
+      let clipUrl = chosen.clipUrl;
+      let urlNote = "";
+      if (!clipUrl) {
+        const exported = await opusclipExportClip(row.opusProjectId as string, chosen.clipId, apiKey, base);
+        if (exported.status === "ready" && exported.url) {
+          clipUrl = exported.url;
+        } else if (exported.status === "rendering") {
+          // Not a failure — the export was started and needs a moment. Put the candidate back and
+          // let the next cycle pick it up; nothing is lost and nothing ephemeral gets persisted.
+          await database.update(candidates).set({ status: "rendering" }).where(eq(candidates.id, row.id));
+          await logEvent("run",
+            `Export started for "${row.title}" — collecting it on the next cycle.`,
+            "candidates", row.id);
+          continue;
+        } else {
+          // Export unavailable: post the preview rather than drop a paid render on the floor, but
+          // say so, because the stored URL will stop playing on the public pages within a day.
+          urlNote = exported.detail;
+          clipUrl = chosen.previewUrl;
+        }
+      }
+      if (!clipUrl) {
+        await database.update(candidates).set({ status: "rendering" }).where(eq(candidates.id, row.id));
+        await logEvent("error",
+          `No usable video URL for "${row.title}" — neither an export nor a preview. `
+          + `${urlNote || "Inspect the raw response at /api/debug/opusclip?projectId=" + row.opusProjectId}`,
+          "candidates", row.id);
+        continue;
+      }
+      if (urlNote) {
+        await logEvent("error",
+          `Posting "${row.title}" from a SHORT-LIVED preview URL because the export was `
+          + `unavailable (${urlNote}). The post will be fine; the clip on the public pages will `
+          + `stop playing in about a day. Confirm the export endpoint at `
+          + `/api/debug/opusclip?projectId=${row.opusProjectId}.`,
+          "candidates", row.id);
+      }
+      const moment = toMoment(chosen, clipUrl);
       const d = toDetected(row);
       // Summon clips are in-thread comments (credit the video author, no link back);
       // scout clips are standalone credit-first posts with the source link in a follow-up.

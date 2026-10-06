@@ -7,10 +7,14 @@ export const maxDuration = 300;
 // In-app OpusClip probe (admin basic-auth via middleware). Shows the RAW API contract so
 // integration failures are diagnosed from real response bodies, in the cloud, from a browser:
 //
-//   GET /api/debug/opusclip?video=<youtube-url>   → key check + create project + first clip checks
-//   GET /api/debug/opusclip?projectId=<id>        → raw exportable-clips response for a project
+//   GET /api/debug/opusclip?video=<youtube-url>            → key check + create project + clip checks
+//   GET /api/debug/opusclip?projectId=<id>                 → raw exportable-clips response
+//   GET /api/debug/opusclip?projectId=<id>&exportClip=<id> → find the real EXPORT endpoint
 //
 // Every step's raw body is returned in the JSON response.
+//
+// ?video= CREATES A REAL, BILLED PROJECT. The other two modes do not: they read an existing
+// project, and the export probe acts on a clip whose render is already paid for.
 
 const BASE = () => (process.env.OPUSCLIP_API_BASE ?? "https://api.opus.pro").replace(/\/$/, "");
 
@@ -44,6 +48,36 @@ export async function GET(req: NextRequest) {
   const projectId = req.nextUrl.searchParams.get("projectId");
   const steps: Step[] = [];
 
+  // Mode 3: find the export endpoint empirically.
+  //
+  // Clips are preview-only until exported, and the REST spelling of that export is the one part of
+  // this integration not confirmed against a real response — so confirm it here rather than guess
+  // in the pipeline. Tries each candidate and reports the status and raw body of all of them; the
+  // one that is not 404/405 is the real endpoint. Costs nothing: the clip is already rendered and
+  // the vendor's contract is that a repeat export never starts a second render.
+  const exportClip = req.nextUrl.searchParams.get("exportClip");
+  if (projectId && exportClip) {
+    const candidates: Array<{ method: "POST" | "GET"; path: string; body?: unknown }> = [
+      { method: "POST", path: `/api/exportable-clips/${encodeURIComponent(exportClip)}/export`, body: { projectId, target: "hd" } },
+      { method: "POST", path: `/api/clip-exports`, body: { projectId, clipId: exportClip, target: "hd" } },
+      { method: "POST", path: `/api/exportable-clips?q=export`, body: { projectId, clipId: exportClip, target: "hd" } },
+      { method: "GET", path: `/api/exportable-clips?q=findById&clipId=${encodeURIComponent(exportClip)}` },
+    ];
+    for (const c of candidates) {
+      const res = await call(c.method, c.path, c.body);
+      steps.push({ step: `${c.method} ${c.path}`, ...res });
+    }
+    const hit = steps.find((st) => st.status !== 404 && st.status !== 405);
+    return NextResponse.json({
+      projectId,
+      clipId: exportClip,
+      verdict: hit
+        ? `${hit.step} answered ${hit.status} — this is the export endpoint. Set it in lib/pipeline/opusclip.ts.`
+        : "None of the candidates answered. Ask OpusClip for the export endpoint and add it here.",
+      steps,
+    }, { status: 200 });
+  }
+
   // Mode 2: just check an existing project's clips, raw.
   if (projectId) {
     const clips = await call("GET", `/api/exportable-clips?q=findByProjectId&projectId=${encodeURIComponent(projectId)}`);
@@ -53,7 +87,9 @@ export async function GET(req: NextRequest) {
 
   if (!video) {
     return NextResponse.json({
-      usage: "GET ?video=<youtube-url> to run a full probe, or ?projectId=<id> to check an existing project",
+      usage: "GET ?video=<youtube-url> to run a full probe (CREATES A BILLED PROJECT), "
+        + "?projectId=<id> to read an existing project's clips, or "
+        + "?projectId=<id>&exportClip=<clipId> to find the export endpoint (free)",
     }, { status: 400 });
   }
 

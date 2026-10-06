@@ -96,12 +96,21 @@ The pipeline is wired to real services; you only need keys and the X account lab
 | `lib/pipeline/publishing.ts` | X v2 post/reply with native video (needs the **Automated** label) |
 | `lib/pipeline/summon.ts` + `feedback.ts` + `xread.ts` | X mention polling + metrics/reshare reads |
 
-> **OpusClip note:** the client is verified against OpusClip's own reference CLI
-> (`POST /api/clip-projects` → poll `GET /api/exportable-clips?q=findByProjectId`;
-> `clipDurations: [[min,max]]`, `layoutAspectRatio: "portrait"`, clip fields `uriForExport`,
-> `renderAsVideoFile.pending`, `judgeResult.hookScore`). Probe it live at
-> `/api/debug/opusclip`; list your brand templates at `/api/debug/brand-templates` and set
-> one in Settings so vertical framing + captions match your brand.
+> **OpusClip note — clips are preview-only until exported.** The flow is
+> `POST /api/clip-projects` → poll `GET /api/exportable-clips?q=findByProjectId` → **export the one
+> clip you are going to post**. The list endpoint returns a short-lived signed *preview* URL and no
+> export field, ever; waiting for one is an infinite wait. This was learned the expensive way: the
+> client gated readiness on an export URL, so `done` was never true, every candidate aged out after
+> two hours against projects holding seventeen finished clips, and the pipeline posted nothing for
+> three weeks while reporting "Render timed out".
+>
+> The previous note here asserted the clip field names were "verified against OpusClip's own
+> reference CLI". They were not, and that sentence is why the bug survived three weeks of looking
+> at this file. Treat the field map in `lib/pipeline/opusclip.ts` as defensive guesswork with
+> fallbacks, and confirm anything you depend on against a real response: `/api/debug/opusclip?projectId=…`
+> prints the raw unmodified body, and `npm run probe -- "<youtube url>"` walks a whole project.
+> List your brand templates at `/api/debug/brand-templates` and set one in Settings so vertical
+> framing + captions match your brand.
 
 **Posting behavior in production:** with `autonomy=auto`, finished clips queue as
 `approved` and drip out — at most **dailyClipCap** per day (admin Settings, default 6) with
