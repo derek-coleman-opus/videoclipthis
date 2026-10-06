@@ -32,7 +32,14 @@ export async function POST(req: NextRequest) {
     // "unverified" is included deliberately: the AUTOMATIC drain never touches it (that is the whole
   // point — the outcome was ambiguous and a retry could double-post), but a human who has checked
   // the timeline must be able to resolve it either way. The fail reason tells them to look first.
-  const actionable = ["pending_review", "failed", "approved", "unverified"].includes(clip.status);
+  //
+  // "expired" is included for a different reason: expireStaleClips() moves a review clip here after
+  // CLIP_REVIEW_TTL_H, and this list was the ONLY thing standing between the operator and a render
+  // they had already paid for. Omitted, it made `expired` unreachable by the pipeline (nothing
+  // selects it) AND by the human (409 here) AND invisible on /posts — a paid clip that could not be
+  // approved, rejected, or even seen. Staleness is a reason to default to NOT posting it, never a
+  // reason to take the choice away.
+  const actionable = ["pending_review", "failed", "approved", "unverified", "expired"].includes(clip.status);
     if (!actionable) {
       return NextResponse.json({ ok: false, error: `clip is ${clip.status}` }, { status: 409 });
     }

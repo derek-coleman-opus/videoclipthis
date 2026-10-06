@@ -1,8 +1,13 @@
 import DbError from "@/components/DbError";
-import { desc, eq, inArray, ne } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { db, clips, candidates, clipPublishes, type ClipPublish } from "@/lib/db";
 import { platformLabel } from "@/lib/pipeline/crosspost";
 import { EDITORIAL_MIN_SCORE } from "@/lib/pipeline/editorial";
+
+/** Clip states a human can still resolve. MUST stay in step with `actionable` in
+ *  `app/api/clips/action/route.ts` — when these two drifted, the UI hid clips the API would
+ *  happily have acted on, and the operator had no way to reach a render they had paid for. */
+const REVIEWABLE = ["pending_review", "failed", "approved", "unverified", "expired"];
 import ClipActions from "@/components/ClipActions";
 import { withSchemaHeal } from "@/lib/db/ensureSchema";
 
@@ -35,10 +40,14 @@ export default async function PostsPage() {
                         ? "bg-sky-900/60 text-sky-300"
                         : c.status === "failed"
                           ? "bg-red-900/60 text-red-300"
-                          : "bg-neutral-800 text-neutral-400"
+                          : c.status === "expired"
+                            ? "bg-orange-900/60 text-orange-300"
+                            : c.status === "unverified"
+                              ? "bg-fuchsia-900/60 text-fuchsia-300"
+                              : "bg-neutral-800 text-neutral-400"
                 }`}
               >
-                {c.status === "approved" ? "queued to post" : c.status}
+                {c.status === "approved" ? "queued to post" : c.status === "expired" ? "stale — still yours to post" : c.status}
               </span>
               {c.status === "failed" && c.failReason && (
                 <span className="max-w-md truncate text-red-400" title={c.failReason}>
@@ -102,7 +111,7 @@ export default async function PostsPage() {
               )}
 
               <div className="min-w-0 flex-1">
-                {!["pending_review", "failed", "approved"].includes(c.status) && (
+                {!REVIEWABLE.includes(c.status) && (
                   <p className="whitespace-pre-wrap text-sm text-neutral-200">{c.postText}</p>
                 )}
 
@@ -128,7 +137,7 @@ export default async function PostsPage() {
                   )}
                 </div>
 
-                {["pending_review", "failed", "approved"].includes(c.status) && (
+                {REVIEWABLE.includes(c.status) && (
                   <div className="mt-2">
                     <ClipActions id={c.id} postText={c.postText} status={c.status} />
                   </div>
@@ -169,7 +178,10 @@ async function load() {
       })
       .from(clips)
       .leftJoin(candidates, eq(clips.candidateId, candidates.id))
-      .where(ne(clips.status, "expired")) // stale review clips disappear from the queue
+      // Expired clips are LISTED, not hidden. They used to be filtered out here, which — combined
+      // with `expired` missing from the actionable list in /api/clips/action — made a paid render
+      // vanish with no trace and no way back. The operator decides whether a stale clip is still
+      // worth posting; the UI's job is to show it is there and mark it stale.
       .orderBy(desc(clips.createdAt))
       .limit(100);
   });

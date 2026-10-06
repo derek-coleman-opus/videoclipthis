@@ -11,7 +11,7 @@
 // project's renders, picks the best, writes the pull quote, and vetoes clips too boring to post.
 // A vetoed clip is queued for review, never deleted — the render is already paid for.
 
-import { and, desc, eq, gte, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { db, candidates, clips, summonRequests, type Candidate, type Clip, type Settings } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import { findProfile } from "./audience";
@@ -42,6 +42,20 @@ const COLLECT_CLAIM_TTL_MIN = Number(process.env.COLLECT_CLAIM_TTL_MIN ?? 15);
 /** Pending-review clips older than this are stale — the moment has passed, so expire them
  *  (we only want to post NEW content). Env-overridable. */
 export const CLIP_REVIEW_TTL_H = Number(process.env.CLIP_REVIEW_TTL_H ?? 6);
+
+/** Clip states that must STOP a candidate producing another clip.
+ *
+ *  Read it as "a post exists, might exist, or was deliberately killed":
+ *    posted/posting  — it is live, or a publish is in flight
+ *    unverified      — the outcome is unknown; a second clip is exactly the double-post we avoid
+ *    rejected        — a human said no, and a re-collect must not overrule them
+ *    pending_review/approved — a live clip is already queued for this candidate
+ *
+ *  Deliberately ABSENT: `expired` and `failed`. Both mean a paid render produced nothing posted
+ *  and nobody chose to kill it, so both must be able to try again. */
+const CLIP_BLOCKS_RECOLLECT = [
+  "pending_review", "approved", "posting", "posted", "unverified", "rejected",
+];
 
 export interface CollectResult {
   checked: number;
@@ -287,12 +301,22 @@ export async function collectRenders(): Promise<CollectResult> {
         }
       }
 
-      // One clip per candidate. The claim above makes a concurrent duplicate very unlikely, and the
-      // partial unique index makes it impossible; this check turns what would be a constraint
+      // One LIVE clip per candidate. The claim above makes a concurrent duplicate very unlikely, and
+      // the partial unique index makes it impossible; this check turns what would be a constraint
       // violation into a clean skip, and also covers a candidate re-entering the loop after a
       // crash between the insert and the status update.
+      //
+      // The status predicate matters: without it, ANY existing clip row blocked a replacement
+      // forever, including a clip that had been expired by the review TTL or had failed to publish
+      // on a dead URL. The candidate was then set to "selected" and the paid render was gone for
+      // good. Only states where a post exists, may exist, or was deliberately killed block a
+      // retry — `expired` and `failed` are precisely the cases a re-collect is meant to rescue.
       const already = await database
-        .select({ id: clips.id }).from(clips).where(eq(clips.candidateId, row.id)).limit(1);
+        .select({ id: clips.id }).from(clips)
+        .where(and(
+          eq(clips.candidateId, row.id),
+          inArray(clips.status, CLIP_BLOCKS_RECOLLECT),
+        )).limit(1);
       if (already.length) {
         await database.update(candidates).set({ status: "selected" }).where(eq(candidates.id, row.id));
         slog("collect_skip_duplicate", { candidateId: row.id, existingClipId: already[0].id });
