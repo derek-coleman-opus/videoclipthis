@@ -180,22 +180,61 @@ export async function computeHealth(): Promise<HealthReport> {
   // for five days. That is precisely the failure this whole module was written to make impossible,
   // reproduced inside the module itself.
   //
-  // The "Render submit failed" prefix is written by runScout's account-block branch and is
-  // load-bearing there too (diagnostics counts it the same way). Keep them in step.
-  const submitFailures = Number((await database.select({ n: one }).from(events)
+  // TWO DIFFERENT FAILURES, and conflating them was its own bug. This matched the bare
+  // "Render submit failed" prefix, which runScout writes from THREE branches: the account block
+  // (402/403), a terminal per-candidate failure (any error at all — a bad video URL, a 500, an
+  // ambiguous outcome), and a retryable one. So a single malformed URL raised "nothing can enter
+  // the render queue no matter how full it looks … check the account" and pointed the operator at
+  // their billing page. An alarm that names a cause it has not established is worse than no alarm,
+  // because it is acted on. Only the [account:…] marker — written by the branch that actually
+  // classified the error — justifies that text.
+  const since = new Date(Date.now() - SUBMIT_FAIL_WINDOW_H * 36e5);
+  const submitFails = await database
+    .select({ message: events.message, createdAt: events.createdAt })
+    .from(events)
     .where(and(
       eq(events.type, "error"),
-      gte(events.createdAt, new Date(Date.now() - SUBMIT_FAIL_WINDOW_H * 36e5)),
+      gte(events.createdAt, since),
       sql`${events.message} LIKE 'Render submit failed%'`,
-    )))[0]?.n ?? 0);
-  pipeline.submitFailures = submitFailures;
-  if (submitFailures > 0) {
+    ))
+    .orderBy(desc(events.createdAt));
+  // The marker is only on events written since it shipped. Events already in the window were
+  // logged without it, so fall back to the same signatures accountBlockKind() tests — otherwise a
+  // genuine account block would be mis-sorted into "per-candidate" for the first SUBMIT_FAIL_WINDOW_H
+  // after a deploy, which is exactly the wrong moment to get it wrong.
+  const isAccountBlock = (m: string) =>
+    m.startsWith("Render submit failed [account:")
+    || /\s402:/.test(m) || /InsufficientCredit/i.test(m) || /ProxyNotAllowed/i.test(m);
+  const blocked = submitFails.filter((e) => isAccountBlock(e.message ?? ""));
+  const other = submitFails.filter((e) => !isAccountBlock(e.message ?? ""));
+  pipeline.submitFailures = submitFails.length;
+
+  if (blocked.length > 0) {
     problems.push(
-      `STALLED: ${submitFailures} render submission(s) REFUSED by OpusClip in the last `
+      `STALLED: ${blocked.length} render submission(s) REFUSED by OpusClip in the last `
       + `${SUBMIT_FAIL_WINDOW_H}h — nothing can enter the render queue no matter how full it looks. `
       + `402 means the plan's render budget is gone, which is a DIFFERENT meter from the API cap and `
       + `can sit next to a healthy-looking one; 403 means the account is being refused as datacenter `
       + `egress. Neither is fixable in code — check the account.`,
+    );
+  }
+
+  if (other.length > 0) {
+    // Did ANYTHING get submitted in the same window? Some candidates failing while others succeed
+    // is ordinary attrition — bad URLs, private videos, the occasional 5xx — and calling that a
+    // stalled pipeline is how a red dashboard stopped meaning anything. Nothing getting through at
+    // all is a different story, and only then does this escalate.
+    const gotThrough = Number((await database.select({ n: one }).from(candidates)
+      .where(gte(candidates.renderStartedAt, since)))[0]?.n ?? 0);
+    const latest = (other[0]?.message ?? "").slice(0, 300);
+    problems.push(
+      `${gotThrough === 0 ? "STALLED: " : ""}${other.length} render submission(s) failed in the last `
+      + `${SUBMIT_FAIL_WINDOW_H}h for a PER-CANDIDATE reason — this is not an account block, so `
+      + `check the video rather than the billing page. `
+      + (gotThrough === 0
+        ? `Nothing was submitted successfully in the same window, so the supply side is not moving. `
+        : `${gotThrough} submission(s) did get through in the same window. `)
+      + `Latest: ${latest}`,
     );
   }
 

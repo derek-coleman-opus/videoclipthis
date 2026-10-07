@@ -289,9 +289,18 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
           creditWallHit = true;
           // The "Render submit failed" prefix is load-bearing: /api/admin/diagnostics counts
           // these by prefix to report render trouble. Keep it if you reword the rest.
+          // The [account:…] marker is MACHINE-READ by health.ts and /api/admin/diagnostics, which
+          // is the whole point: accountBlockKind() has the error object in hand and already knows
+          // whether this is a 402 or a 403, and that verdict used to be thrown away before it
+          // reached the log. Both readers then re-guessed it from the message text — health.ts by
+          // matching the bare "Render submit failed" prefix, which EVERY submit failure writes, so
+          // one candidate with a bad URL raised "nothing can enter the render queue … check the
+          // account" and sent the operator to their billing page. Classify once, at the point of
+          // failure; do not re-derive it downstream.
           await logEvent("error",
-            `Render submit failed — ${accountBlockNote(block)} Keeping this candidate queued with no `
-            + `attempt consumed, so the backlog survives: ${(e as Error).message}`,
+            `Render submit failed [account:${block}] — ${accountBlockNote(block)} Keeping this `
+            + `candidate queued with no attempt consumed, so the backlog survives: `
+            + `${(e as Error).message}`,
             "candidates", c.id);
         }
         return;

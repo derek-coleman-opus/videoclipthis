@@ -145,11 +145,19 @@ export async function GET() {
     //
     // Matched on the "Render submit failed" message prefix that every submit-failure path in
     // runScout.ts emits — including the credit-wall branch, which keeps the prefix for this query.
+    //
+    // The credit/proxy split reads the [account:…] marker that runScout writes from the verdict
+    // accountBlockKind() already reached, rather than re-deriving it here. It used to match
+    // ILIKE '%402%', which hits any message that happens to contain "402" anywhere — a video id,
+    // a duration, an upstream body echoed into the error — and would then report a credit block
+    // that never happened. accountBlockKind's own test is the much tighter /\s402:/.
     const submitFails: any = await db().execute(
       sql`SELECT
             count(*)::int AS n,
-            count(*) FILTER (WHERE message ILIKE '%402%' OR message ILIKE '%InsufficientCredit%')::int AS credit_n,
-            count(*) FILTER (WHERE message ILIKE '%ProxyNotAllowed%')::int AS proxy_n,
+            count(*) FILTER (WHERE message LIKE 'Render submit failed [account:credit]%'
+                                OR message ~ '\s402:' OR message ILIKE '%InsufficientCredit%')::int AS credit_n,
+            count(*) FILTER (WHERE message LIKE 'Render submit failed [account:proxy]%'
+                                OR message ILIKE '%ProxyNotAllowed%')::int AS proxy_n,
             max(created_at) AS latest
           FROM events
           WHERE type = 'error'
