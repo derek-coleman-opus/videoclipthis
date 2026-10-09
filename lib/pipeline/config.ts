@@ -38,7 +38,8 @@ export const MAX_CLIPS_PER_RUN = Number(process.env.MAX_CLIPS_PER_RUN ?? 25);
 
 /** Stop submitting once this many minutes of SOURCE video have been submitted today. At ~1
  *  OpusClip credit per source minute this is ≈ a daily credit budget. Default 600 min/day
- *  (~10 h ≈ 600 credits, ~18k/month) — well inside a 90k/month plan with room for Summon. */
+ *  (~10 h ≈ 600 credits, ~18k/month). Sized against the RENDER BALANCE, not the 90k
+ *  API cap this used to cite — the two are different meters and the cap is not headroom. */
 export const DAILY_SOURCE_MINUTES_CAP = Number(process.env.DAILY_SOURCE_MINUTES_CAP ?? 600);
 
 /** Never submit a SINGLE video longer than this. OpusClip bills per minute of source and refuses
@@ -66,8 +67,11 @@ export const MAX_SUBMIT_ATTEMPTS = Number(process.env.MAX_SUBMIT_ATTEMPTS ?? 3);
  *  endpoint is unreachable or returns a shape we don't recognize.
  *
  *  Guards the API RATE CAP only. It cannot prevent a 402 InsufficientCreditError — that comes off
- *  the plan's render balance, a meter no API surface exposes. Do not read this floor as a
- *  guarantee that submits will be accepted. */
+ *  the plan's render balance, which IS exposed (credits.remaining_minutes, read as
+ *  balanceMinutes) and is guarded separately by MIN_RENDER_BALANCE_MIN below. This comment used
+ *  to claim no API surface exposed it, which is how the balance went unread for three weeks while
+ *  the floor below it passed on the wrong number. Do not read this floor as a guarantee that
+ *  submits will be accepted. */
 export const MIN_CREDITS_REMAINING = Number(process.env.MIN_CREDITS_REMAINING ?? 200);
 
 /** Minimum PROCESSING MINUTES on the plan before new renders are held.
@@ -102,7 +106,15 @@ export const FIGURE_SEARCH_INTERVAL_H = Number(process.env.FIGURE_SEARCH_INTERVA
 /** OpusClip caps CONCURRENT projects per plan (Pro Beta = 4). Submitting past the cap fails the
  *  create call, so we keep in-flight renders at or below this and queue the rest. Stay a notch
  *  under the plan cap to leave headroom for Summon renders (shared concurrency budget). */
-export const MAX_CONCURRENT_RENDERS = Number(process.env.MAX_CONCURRENT_RENDERS ?? 3);
+/** In-flight OpusClip projects allowed at once.
+ *
+ *  8, not 3. The live account reports `concurrent: { used: 0, limit: 10 }` — so 3 held throughput
+ *  at under a third of the plan, and, because "rendering" rows count against this, three slow
+ *  renders tripped the "renders are wedged" alarm during entirely normal operation. 8 leaves
+ *  headroom under the reported 10 for Summon, which shares this budget. The real limit is
+ *  readable (opusclipUsage -> concurrentLimit) and reported in diagnostics; raise this only to
+ *  what that number says. */
+export const MAX_CONCURRENT_RENDERS = Number(process.env.MAX_CONCURRENT_RENDERS ?? 8);
 
 /** Topic/keyword YouTube searches — a discovery vector beyond the channel list and tracked
  *  figures. Admin "Search topics" overrides these. Each search.list call costs 100 quota units. */

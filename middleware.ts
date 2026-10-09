@@ -12,6 +12,9 @@ function isPublic(pathname: string): boolean {
   return (
     pathname === "/" ||
     pathname === "/clips" || pathname.startsWith("/clips/") ||
+    // Serves `posted` clips only (enforced in the route), i.e. exactly what /clips already shows.
+    // It exists because clips.clipUrl is a signed URL that expires; see lib/pipeline/clipFile.ts.
+    pathname.startsWith("/api/clip-file/") ||
     pathname.startsWith("/speakers/") ||
     pathname === "/sitemap.xml" || pathname === "/robots.txt"
   );

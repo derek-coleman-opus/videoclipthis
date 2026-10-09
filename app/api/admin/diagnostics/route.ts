@@ -64,11 +64,17 @@ const ENV_KEYS = [
   "X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET", "X_BEARER_TOKEN",
 ];
 
-async function timed(fetcher: () => Promise<Response>): Promise<{ ok: boolean; status: number; detail: string }> {
+// The signal is HANDED TO THE FETCHER. It used to build the AbortController and the timer and
+// then never pass ctrl.signal anywhere, so the 8s timeout was decorative: one hanging upstream
+// held the whole diagnostics report open until the function budget ran out — on the page whose
+// entire job is to tell you what is broken.
+async function timed(
+  fetcher: (signal: AbortSignal) => Promise<Response>,
+): Promise<{ ok: boolean; status: number; detail: string }> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 8000);
   try {
-    const res = await fetcher();
+    const res = await fetcher(ctrl.signal);
     const body = await res.text();
     return { ok: res.ok, status: res.status, detail: body.slice(0, 300) };
   } catch (e) {
@@ -156,7 +162,7 @@ export async function GET() {
       sql`SELECT
             count(*)::int AS n,
             count(*) FILTER (WHERE message LIKE 'Render submit failed [account:credit]%'
-                                OR message ~ '\s402:' OR message ILIKE '%InsufficientCredit%')::int AS credit_n,
+                                OR message ~ '\\s402:' OR message ILIKE '%InsufficientCredit%')::int AS credit_n,
             count(*) FILTER (WHERE message LIKE 'Render submit failed [account:proxy]%'
                                 OR message ILIKE '%ProxyNotAllowed%')::int AS proxy_n,
             max(created_at) AS latest
@@ -299,8 +305,9 @@ export async function GET() {
   // response so nobody reads a healthy `remaining` as "renders are fine" again.
   if (process.env.OPUSCLIP_API_KEY) {
     const base = (process.env.OPUSCLIP_API_BASE ?? "https://api.opus.pro").replace(/\/$/, "");
-    const r = await timed(() => fetch(`${base}/api/api-usage?q=mine`, {
+    const r = await timed((signal) => fetch(`${base}/api/api-usage?q=mine`, {
       headers: { authorization: `Bearer ${process.env.OPUSCLIP_API_KEY}`, accept: "application/json" },
+      signal,
     }));
     report.opusclip = {
       ...r,
@@ -331,8 +338,9 @@ export async function GET() {
 
   // 5. Live YouTube key/quota check (i18nLanguages = 1 quota unit).
   if (process.env.YOUTUBE_API_KEY) {
-    const r = await timed(() => fetch(
+    const r = await timed((signal) => fetch(
       `https://www.googleapis.com/youtube/v3/i18nLanguages?part=snippet&hl=en&key=${process.env.YOUTUBE_API_KEY}`,
+      { signal },
     ));
     report.youtube = r;
     if (!r.ok) problems.push(`YouTube API: HTTP ${r.status} ${r.detail.includes("quota") ? "quota exceeded" : r.detail}`);
@@ -340,8 +348,9 @@ export async function GET() {
 
   // 6. Live Anthropic key check (models list is free).
   if (process.env.ANTHROPIC_API_KEY) {
-    const r = await timed(() => fetch("https://api.anthropic.com/v1/models?limit=1", {
+    const r = await timed((signal) => fetch("https://api.anthropic.com/v1/models?limit=1", {
       headers: { "x-api-key": process.env.ANTHROPIC_API_KEY ?? "", "anthropic-version": "2023-06-01" },
+      signal,
     }));
     report.anthropic = { ok: r.ok, status: r.status };
     if (!r.ok) problems.push(`Anthropic API: HTTP ${r.status} ${r.detail}`);

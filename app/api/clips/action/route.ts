@@ -4,6 +4,7 @@ import { db, clips } from "@/lib/db";
 import { requireXEnv } from "@/lib/pipeline/env";
 import { logEvent } from "@/lib/pipeline/events";
 import { markClipPosted } from "@/lib/pipeline/render";
+import { freshClipUrl } from "@/lib/pipeline/clipFile";
 import { xPublisher } from "@/lib/pipeline/publishing";
 import { withSchemaHeal } from "@/lib/db/ensureSchema";
 
@@ -58,9 +59,16 @@ export async function POST(req: NextRequest) {
 
     try {
       requireXEnv();
+      // RE-MINT BEFORE PUBLISHING, for the same reason the automatic drain does: the stored URL
+      // is signed and expires in about a day. This route is the RETRY path — it is reached by a
+      // human looking at a clip that has been sitting in review or in `failed`, which is to say
+      // precisely the clips whose URL is most likely already dead. Replaying it made every
+      // manual retry on a day-old clip fail forever, with the operator re-clicking a button that
+      // could not work.
+      const fresh = await freshClipUrl(id);
       const result = await xPublisher().publish(
         {
-          clipUrl: clip.clipUrl ?? "",
+          clipUrl: fresh ?? clip.clipUrl ?? "",
           postText,
           costUsd: clip.costUsd ?? 0,
           durationS: Math.max(0, Math.round((clip.endS ?? 0) - (clip.startS ?? 0))),

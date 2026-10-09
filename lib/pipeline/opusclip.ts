@@ -206,7 +206,11 @@ export type AccountBlock = "credit" | "proxy";
 export function accountBlockKind(e: unknown): AccountBlock | null {
   const m = (e as Error)?.message ?? String(e);
   if (/\s402:/.test(m) || /InsufficientCredit/i.test(m)) return "credit";
-  if (/ProxyNotAllowed/i.test(m)) return "proxy";
+  // The 403 STATUS counts, not only the body text. Detecting this by body string alone meant a
+  // 403 with a reworded or non-JSON body was misclassified as a per-candidate failure, consumed a
+  // submit attempt, and — three runs in — pushed the whole backlog to `failed`. That regression
+  // has already happened once on this repo.
+  if (/ProxyNotAllowed/i.test(m) || /\s403:/.test(m)) return "proxy";
   return null;
 }
 
@@ -234,14 +238,25 @@ export async function opusclipCreateProject(
     { retry: false }, // billed + non-idempotent — never auto-repeat (see opusFetch)
   );
   const proj = data.data ?? data.project ?? data;
-  const id = String(proj?.id ?? proj?.projectId ?? "");
+  // `project_id` first: the live data model is snake_case throughout (clip_id, duration_sec,
+  // preview_url, remaining_minutes). Missing it here is the expensive kind of miss — the project
+  // has ALREADY been created and billed by the time this parses, and a throw is classified
+  // non-retryable, so the id is lost and the paid project is unreachable forever.
+  const id = String(proj?.project_id ?? proj?.id ?? proj?.projectId ?? "");
   if (!id) throw new Error(`OpusClip: no project id in create response: ${JSON.stringify(data).slice(0, 300)}`);
   return id;
 }
 
 function asArray(data: any): any[] {
   if (Array.isArray(data)) return data;
-  return data?.data?.list ?? (Array.isArray(data?.data) ? data.data : null) ?? data?.clips ?? data?.list ?? [];
+  // `data.clips` was missing, which is the envelope every other function in this file assumes
+  // (`data.data ?? data`) combined with the key the live response actually uses. Bottoming out at
+  // [] here is indistinguishable from "still rendering", so a shape miss reproduces the original
+  // three-week outage exactly: no clips, no error, no signal.
+  return data?.data?.list
+    ?? data?.data?.clips
+    ?? (Array.isArray(data?.data) ? data.data : null)
+    ?? data?.clips ?? data?.list ?? [];
 }
 
 // WHAT IS ACTUALLY CONFIRMED, and what is not.
@@ -453,15 +468,26 @@ export async function opusclipExportClip(
       // retry: true is safe here and nowhere else in this client — this POST is idempotent by
       // contract, unlike project creation which bills on every call.
       const data = await opusFetch("POST", path, apiKey, base, body, { retry: true });
-      exportPathHint = i;
-      return readExport(data);
+      const parsed = readExport(data);
+      // PIN ONLY ON SUCCESS. This pinned on "did not 404", so a wrong endpoint answering 200 with
+      // an unrecognised body would be cached for the life of the process and make every later
+      // export permanently "unavailable" — the whole fleet falling back to preview URLs forever
+      // because of one bad guess on the first call.
+      if (parsed.status !== "unavailable") exportPathHint = i;
+      return parsed;
     } catch (e) {
       const msg = (e as Error).message;
       lastErr = msg;
       // Only a "wrong endpoint" answer justifies trying the next spelling. Anything else (401,
       // 402, 403, 5xx) is a real answer from the right endpoint and must not be papered over by
       // walking the list.
-      if (!/\b(404|405)\b/.test(msg)) break;
+      //
+      // Matched against the STATUS, not the whole error string. opusFetch formats failures as
+      // `OpusClip POST <path> <status>: <body>`, and testing the lot meant a 200-with-"404"-in-
+      // the-body, or any body quoting those digits, resumed walking and POSTed to a different
+      // endpoint — exactly what the paragraph above says must not happen.
+      const status = /OpusClip \w+ [^ ]+ (\d{3}):/.exec(msg)?.[1];
+      if (status !== "404" && status !== "405") break;
     }
   }
   return {

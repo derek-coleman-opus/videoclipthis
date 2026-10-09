@@ -17,6 +17,7 @@ import { getSettings } from "@/lib/settings";
 import { findProfile } from "./audience";
 import { MIN_CLIP_POST_GAP_MIN } from "./config";
 import { opusclipExportClip, opusclipFetchClips, type OpusClipResult } from "./opusclip";
+import { freshClipUrl } from "./clipFile";
 import { crossPostClip } from "./crosspost";
 import { screenClipForAutoPost } from "./clipSafety";
 import {
@@ -299,6 +300,21 @@ export async function collectRenders(): Promise<CollectResult> {
         } else if (exported.status === "rendering") {
           // Not a failure — the export was started and needs a moment. Put the candidate back and
           // let the next cycle pick it up; nothing is lost and nothing ephemeral gets persisted.
+          //
+          // `expired` is checked here for the same reason every other release path checks it: a
+          // release that ignores the timeout clock makes the candidate IMMORTAL. It would come
+          // back every cycle forever, and — because "rendering" counts against
+          // MAX_CONCURRENT_RENDERS — permanently eat one of the three submit slots. Three exports
+          // that never reach "ready" would wedge the whole pipeline with no way out.
+          if (expired) {
+            await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, row.id));
+            await logEvent("error",
+              `Export for "${row.title}" never became ready within ${RENDER_TIMEOUT_H}h. The render `
+              + `is paid for and still exists — re-collect it from the dashboard once the export `
+              + `clears.`, "candidates", row.id);
+            failed++;
+            continue;
+          }
           await database.update(candidates).set({ status: "rendering" }).where(eq(candidates.id, row.id));
           await logEvent("run",
             `Export started for "${row.title}" — collecting it on the next cycle.`,
@@ -312,9 +328,15 @@ export async function collectRenders(): Promise<CollectResult> {
         }
       }
       if (!clipUrl) {
-        await database.update(candidates).set({ status: "rendering" }).where(eq(candidates.id, row.id));
+        // Same immortality hazard as above: without the expiry check this candidate is retried
+        // forever while holding a concurrency slot.
+        await database.update(candidates)
+          .set({ status: expired ? "failed" : "rendering" })
+          .where(eq(candidates.id, row.id));
+        if (expired) failed++;
         await logEvent("error",
-          `No usable video URL for "${row.title}" — neither an export nor a preview. `
+          `No usable video URL for "${row.title}" — neither an export nor a preview`
+          + `${expired ? ` after ${RENDER_TIMEOUT_H}h, giving up` : ", will retry"}. `
           + `${urlNote || "Inspect the raw response at /api/debug/opusclip?projectId=" + row.opusProjectId}`,
           "candidates", row.id);
         continue;
@@ -546,9 +568,15 @@ export async function drainApprovedClips(cfg?: Settings): Promise<number> {
     if (!claimed.length) continue; // another run already has it
 
     try {
+      // RE-MINT BEFORE PUBLISHING. clip.clipUrl was signed at collect time and expires in about a
+      // day, while this drain deliberately holds clips: behind the daily cap they wait for
+      // tomorrow, and behind the pacing gap they wait a cycle. A clip queued on Monday and
+      // released on Wednesday published a dead URL and failed permanently — the cap turning
+      // healthy clips into failures. Re-exporting is free and idempotent.
+      const fresh = await freshClipUrl(clip.id);
       const res = await xPublisher().publish(
         {
-          clipUrl: clip.clipUrl ?? "",
+          clipUrl: fresh ?? clip.clipUrl ?? "",
           postText: clip.postText,
           costUsd: clip.costUsd ?? 0,
           durationS: Math.max(0, Math.round((clip.endS ?? 0) - (clip.startS ?? 0))),

@@ -39,7 +39,9 @@ export default async function ClipPage({ params }: Props) {
     name: clip.hookCaption || clip.title,
     description: `Highlight from "${clip.title}"${clip.speaker ? ` by ${clip.speaker}` : ""}`,
     uploadDate: clip.postedAt ? new Date(clip.postedAt).toISOString() : undefined,
-    contentUrl: clip.clipUrl || undefined,
+    // The stable route, never the signed CDN URL: that one 403s a day later and would publish the
+    // signature into public HTML and Google's index.
+    contentUrl: clip.clipUrl ? `${siteUrl()}/api/clip-file/${clip.id}` : undefined,
     url: `${siteUrl()}/clips/${clip.id}`,
   };
 
@@ -79,7 +81,7 @@ export default async function ClipPage({ params }: Props) {
 
       {clip.clipUrl ? (
         <video
-          src={clip.clipUrl}
+          src={`/api/clip-file/${clip.id}`}
           controls
           playsInline
           preload="metadata"

@@ -194,7 +194,8 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       if (usage.balanceMinutes != null && usage.balanceMinutes < MIN_RENDER_BALANCE_MIN) {
         slots = 0;
         await logEvent("error",
-          `OpusClip render balance is ${usage.balanceMinutes} minute(s) — below the `
+          `Render submit failed [account:credit] — OpusClip render balance is `
+          + `${usage.balanceMinutes} minute(s), below the `
           + `${MIN_RENDER_BALANCE_MIN}-minute floor, so no new render can succeed and submitting `
           + `would just collect 402s. THIS IS THE METER THAT BILLS: the API cap can read healthy `
           + `(${usage.remaining ?? "?"} left) right next to an empty balance. Top up the plan's `
