@@ -66,14 +66,21 @@ async function opusFetch(
 // ── Plan usage (the credit meter that actually bills) ───────────────────────
 
 export interface OpusUsage {
-  /** Credits consumed in the current billing month. */
+  /** API-CAP credits consumed this billing month. An allowance, NOT the render balance. */
   used: number | null;
-  /** Monthly credit allowance. */
+  /** Monthly API-cap allowance. */
   limit: number | null;
-  /** limit - used, when both are known. */
+  /** limit - used, when both are known. STILL THE API CAP — see balanceMinutes. */
   remaining: number | null;
-  /** True when the workspace is exempt from caps — treat as unlimited headroom. */
+  /** True when the workspace is exempt from caps — treat as unlimited API-cap headroom. */
   uncapped: boolean;
+  /** THE METER THAT ACTUALLY BILLS A RENDER: processing minutes left on the plan.
+   *
+   *  This is the number a submit is checked against, and it is completely independent of the API
+   *  cap above. A live account read 4 minutes here while `remaining` read 88,812 — so a floor on
+   *  `remaining` passes cheerfully while every single submit comes back 402. null when the
+   *  response does not carry it; callers must treat null as "no signal", never as "no credits". */
+  balanceMinutes: number | null;
 }
 
 /** Read the org's credit meter. Field names vary across response shapes, so pick defensively and
@@ -89,11 +96,15 @@ export async function opusclipUsage(apiKey: string, base: string): Promise<OpusU
   const used = num(monthly?.used ?? monthly?.usedCredits ?? monthly?.creditsUsed);
   const limit = num(monthly?.limit ?? monthly?.quota ?? monthly?.creditLimit);
   const remainingRaw = num(monthly?.remaining ?? monthly?.creditsRemaining);
+  // credits.remaining_minutes, confirmed against a live response.
+  const credits = d.credits ?? {};
+  const balanceMinutes = num(credits?.remaining_minutes ?? credits?.remainingMinutes ?? credits?.minutes);
   return {
     used,
     limit,
     remaining: remainingRaw ?? (used != null && limit != null ? limit - used : null),
     uncapped: Boolean(d.uncapped ?? monthly?.uncapped ?? false),
+    balanceMinutes,
   };
 }
 
@@ -247,7 +258,12 @@ function asArray(data: any): any[] {
 function normalizeClip(c: any): OpusClipResult {
   const durationS = c.durationMs != null ? Number(c.durationMs) / 1000 : Number(c.duration_sec ?? c.durationSec ?? 0);
   return {
-    clipId: String(c.id ?? c.clipId ?? c.curationId ?? ""),
+    // `clip_id` is the real field, CONFIRMED against a live response. This read
+    // `id ?? clipId ?? curationId`, none of which exist, so clipId was "" for every clip —
+    // which nulled clips.opusClipId (breaking cross-posting) and, worse, made the export call
+    // below a guaranteed no-op, since exporting needs the clip id. `curationId` is a different
+    // id space entirely and never belonged in this chain.
+    clipId: String(c.clip_id ?? c.clipId ?? c.id ?? ""),
     startS: 0,
     endS: durationS,
     score: Number(c.score ?? c.judgeResult?.hookScore ?? 0),

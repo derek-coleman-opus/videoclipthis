@@ -3,7 +3,7 @@ import { db, candidates, runs } from "@/lib/db";
 import { getSettings, parseWatchChannels, parseSearchTopics, updateSummonState } from "@/lib/settings";
 import {
   DAILY_SOURCE_MINUTES_CAP, DEFAULT_THRESHOLD, MAX_CLIPS_PER_RUN, MAX_CONCURRENT_RENDERS,
-  MAX_SOURCE_MINUTES_PER_VIDEO, MAX_SUBMIT_ATTEMPTS, MIN_CREDITS_REMAINING,
+  MAX_SOURCE_MINUTES_PER_VIDEO, MAX_SUBMIT_ATTEMPTS, MIN_CREDITS_REMAINING, MIN_RENDER_BALANCE_MIN,
   RENDER_SUBMIT_MULTIPLIER, FIGURE_SEARCH_INTERVAL_H,
   SEARCH_TOPICS, SEARCH_BUDGET_PER_BURST, WATCHLIST,
 } from "./config";
@@ -179,20 +179,31 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       `Daily source-video budget reached (${Math.round(sourceMinutesToday)}/${DAILY_SOURCE_MINUTES_CAP} min ≈ credits) — no new renders today`);
   }
 
-  // Plan-level floor: don't start a render that could push the account past its monthly credits.
-  // Best-effort — an unreachable or unrecognized usage response must never stall the pipeline.
+  // Plan-level floor. Best-effort — an unreachable or unrecognized usage response must never
+  // stall the pipeline, so every unknown reads as "no signal", not as "no credits".
   //
-  // This reads the API RATE CAP, which is not the meter that bills a render: an account can be
-  // far above this floor and still have every submit answered 402 InsufficientCreditError. So this
-  // gate passing means nothing about whether renders will succeed — that case is caught at submit
-  // time by accountBlockKind() below, which is the only place it is visible.
+  // TWO SEPARATE METERS, and checking only the first was a real outage. `remaining` is the API
+  // RATE CAP; `balanceMinutes` is the processing balance a render is actually billed against. A
+  // live account read **4 minutes of balance against 88,812 of API cap** — so the old floor
+  // (remaining < 200) passed by a factor of four hundred while every submit came back 402
+  // InsufficientCreditError. The pipeline believed it was healthy and the dashboard agreed.
   if (slots > 0) {
     try {
       const usage = await opusclipUsage(opusKey, opusBase);
-      if (!usage.uncapped && usage.remaining != null && usage.remaining < MIN_CREDITS_REMAINING) {
+      // The balance first: it is the one that decides whether a render can happen at all.
+      if (usage.balanceMinutes != null && usage.balanceMinutes < MIN_RENDER_BALANCE_MIN) {
         slots = 0;
         await logEvent("error",
-          `OpusClip credits nearly exhausted (${usage.remaining} left of ${usage.limit ?? "?"}) — holding renders`);
+          `OpusClip render balance is ${usage.balanceMinutes} minute(s) — below the `
+          + `${MIN_RENDER_BALANCE_MIN}-minute floor, so no new render can succeed and submitting `
+          + `would just collect 402s. THIS IS THE METER THAT BILLS: the API cap can read healthy `
+          + `(${usage.remaining ?? "?"} left) right next to an empty balance. Top up the plan's `
+          + `processing minutes. Already-rendered clips are unaffected — re-collect them from the `
+          + `dashboard, which costs nothing.`);
+      } else if (!usage.uncapped && usage.remaining != null && usage.remaining < MIN_CREDITS_REMAINING) {
+        slots = 0;
+        await logEvent("error",
+          `OpusClip API cap nearly exhausted (${usage.remaining} left of ${usage.limit ?? "?"}) — holding renders`);
       }
     } catch (e) {
       slog("opusclip_usage_check_failed", { error: (e as Error).message });

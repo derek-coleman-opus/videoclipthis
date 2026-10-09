@@ -70,6 +70,15 @@ export const MAX_SUBMIT_ATTEMPTS = Number(process.env.MAX_SUBMIT_ATTEMPTS ?? 3);
  *  guarantee that submits will be accepted. */
 export const MIN_CREDITS_REMAINING = Number(process.env.MIN_CREDITS_REMAINING ?? 200);
 
+/** Minimum PROCESSING MINUTES on the plan before new renders are held.
+ *
+ *  Distinct from MIN_CREDITS_REMAINING above, which guards the API rate cap. This guards the
+ *  balance a render is billed against — roughly one minute per minute of source video — and it is
+ *  the one that decides whether a submit can succeed. The two can disagree wildly: a live account
+ *  read 4 minutes of balance against 88,812 of API cap. Five minutes is a floor, not a budget:
+ *  below it nothing worth clipping will fit anyway. */
+export const MIN_RENDER_BALANCE_MIN = Number(process.env.MIN_RENDER_BALANCE_MIN ?? 5);
+
 /** Auto-post pacing: minimum minutes between consecutive clip posts (scout kind). The daily
  *  volume cap itself lives in settings.dailyClipCap so it's tunable from the admin. */
 export const MIN_CLIP_POST_GAP_MIN = Number(process.env.MIN_CLIP_POST_GAP_MIN ?? 20);

@@ -3,9 +3,10 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { lastHealAttempt } from "@/lib/db/ensureSchema";
 import { getSettings } from "@/lib/settings";
-import { MIN_CLIP_POST_GAP_MIN } from "@/lib/pipeline/config";
+import { MIN_CLIP_POST_GAP_MIN, MIN_RENDER_BALANCE_MIN } from "@/lib/pipeline/config";
 import { EDITORIAL_MIN_SCORE } from "@/lib/pipeline/editorial";
 import { hasXEnv } from "@/lib/pipeline/env";
+import { opusclipUsage } from "@/lib/pipeline/opusclip";
 import { CLIP_REVIEW_TTL_H } from "@/lib/pipeline/render";
 import { failingComponents, fetchXUsage, getXbotHealth } from "@/lib/xbot/health";
 import { effectiveCaps, inLockFreeze } from "@/lib/xbot/limits";
@@ -303,10 +304,29 @@ export async function GET() {
     }));
     report.opusclip = {
       ...r,
-      meter: "API rate cap only — NOT the plan's render balance. Submits can fail 402 "
-        + "InsufficientCreditError while this reads healthy; see renderSubmit for the truth.",
+      meter: "API rate cap. NOT the meter that bills a render — see renderBalanceMinutes below.",
     };
     if (!r.ok) problems.push(`OpusClip API: HTTP ${r.status} ${r.detail}`);
+
+    // THE RENDER BALANCE. The comment here used to say this endpoint "does NOT report the plan's
+    // render balance" — it does, as credits.remaining_minutes, and nothing read it. That is the
+    // number that decides whether a submit succeeds, and it was invisible for three weeks while
+    // the API cap beside it read 88,812 of 90,000 and everything looked fine.
+    try {
+      const usage = await opusclipUsage(process.env.OPUSCLIP_API_KEY ?? "", base);
+      report.renderBalanceMinutes = usage.balanceMinutes;
+      if (usage.balanceMinutes != null && usage.balanceMinutes < MIN_RENDER_BALANCE_MIN) {
+        problems.push(
+          `STALLED: OpusClip render balance is ${usage.balanceMinutes} minute(s) — no new render `
+          + `can succeed, and every submit will come back 402. This is a DIFFERENT meter from the `
+          + `API cap above, which reads ${usage.remaining ?? "?"} and is not evidence of anything. `
+          + `Top up the plan's processing minutes. Clips already rendered are unaffected: `
+          + `re-collect them from the dashboard, which costs nothing.`,
+        );
+      }
+    } catch {
+      report.renderBalanceMinutes = null; // no signal — never read as "no credits"
+    }
   }
 
   // 5. Live YouTube key/quota check (i18nLanguages = 1 quota unit).
