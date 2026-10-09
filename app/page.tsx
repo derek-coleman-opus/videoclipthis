@@ -96,7 +96,7 @@ export default async function PublicHomePage() {
                 {/* The proof: the actual rendered vertical clip, playable in place. */}
                 {c.clipUrl && (
                   <video
-                    src={c.clipUrl}
+                    src={`/api/clip-file/${c.id}`}
                     controls
                     playsInline
                     preload="metadata"

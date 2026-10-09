@@ -12,6 +12,9 @@ function isPublic(pathname: string): boolean {
   return (
     pathname === "/" ||
     pathname === "/clips" || pathname.startsWith("/clips/") ||
+    // Serves `posted` clips only (enforced in the route), i.e. exactly what /clips already shows.
+    // It exists because clips.clipUrl is a signed URL that expires; see lib/pipeline/clipFile.ts.
+    pathname.startsWith("/api/clip-file/") ||
     pathname.startsWith("/speakers/") ||
     pathname === "/sitemap.xml" || pathname === "/robots.txt"
   );
@@ -30,7 +33,22 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
   const expected = process.env.ADMIN_PASSWORD;
-  if (!expected) return NextResponse.next(); // unconfigured (local dev) → allow
+  if (!expected) {
+    // FAIL CLOSED in production. This used to allow the request unconditionally, so a deployment
+    // that simply forgot ADMIN_PASSWORD served the whole admin surface — dashboard, Settings, the
+    // review queues, /api/admin/*, and the debug routes that print raw API responses — to anyone
+    // who guessed the path, with nothing anywhere to indicate it. An unset password is a
+    // misconfiguration, and the safe reading of a misconfiguration is "closed", not "open".
+    // 503, not 401: no password exists, so no credential could ever satisfy a challenge.
+    if (process.env.NODE_ENV === "production") {
+      return new NextResponse(
+        "Admin is locked: ADMIN_PASSWORD is not set on this deployment. Set it in the environment "
+        + "and redeploy.",
+        { status: 503 },
+      );
+    }
+    return NextResponse.next(); // local dev → allow
+  }
 
   const header = req.headers.get("authorization");
   if (header?.startsWith("Basic ")) {

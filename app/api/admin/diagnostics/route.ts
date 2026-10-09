@@ -3,9 +3,10 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { lastHealAttempt } from "@/lib/db/ensureSchema";
 import { getSettings } from "@/lib/settings";
-import { MIN_CLIP_POST_GAP_MIN } from "@/lib/pipeline/config";
+import { MIN_CLIP_POST_GAP_MIN, MIN_RENDER_BALANCE_MIN } from "@/lib/pipeline/config";
 import { EDITORIAL_MIN_SCORE } from "@/lib/pipeline/editorial";
 import { hasXEnv } from "@/lib/pipeline/env";
+import { opusclipUsage } from "@/lib/pipeline/opusclip";
 import { CLIP_REVIEW_TTL_H } from "@/lib/pipeline/render";
 import { failingComponents, fetchXUsage, getXbotHealth } from "@/lib/xbot/health";
 import { effectiveCaps, inLockFreeze } from "@/lib/xbot/limits";
@@ -63,11 +64,17 @@ const ENV_KEYS = [
   "X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET", "X_BEARER_TOKEN",
 ];
 
-async function timed(fetcher: () => Promise<Response>): Promise<{ ok: boolean; status: number; detail: string }> {
+// The signal is HANDED TO THE FETCHER. It used to build the AbortController and the timer and
+// then never pass ctrl.signal anywhere, so the 8s timeout was decorative: one hanging upstream
+// held the whole diagnostics report open until the function budget ran out — on the page whose
+// entire job is to tell you what is broken.
+async function timed(
+  fetcher: (signal: AbortSignal) => Promise<Response>,
+): Promise<{ ok: boolean; status: number; detail: string }> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 8000);
   try {
-    const res = await fetcher();
+    const res = await fetcher(ctrl.signal);
     const body = await res.text();
     return { ok: res.ok, status: res.status, detail: body.slice(0, 300) };
   } catch (e) {
@@ -145,11 +152,19 @@ export async function GET() {
     //
     // Matched on the "Render submit failed" message prefix that every submit-failure path in
     // runScout.ts emits — including the credit-wall branch, which keeps the prefix for this query.
+    //
+    // The credit/proxy split reads the [account:…] marker that runScout writes from the verdict
+    // accountBlockKind() already reached, rather than re-deriving it here. It used to match
+    // ILIKE '%402%', which hits any message that happens to contain "402" anywhere — a video id,
+    // a duration, an upstream body echoed into the error — and would then report a credit block
+    // that never happened. accountBlockKind's own test is the much tighter /\s402:/.
     const submitFails: any = await db().execute(
       sql`SELECT
             count(*)::int AS n,
-            count(*) FILTER (WHERE message ILIKE '%402%' OR message ILIKE '%InsufficientCredit%')::int AS credit_n,
-            count(*) FILTER (WHERE message ILIKE '%ProxyNotAllowed%')::int AS proxy_n,
+            count(*) FILTER (WHERE message LIKE 'Render submit failed [account:credit]%'
+                                OR message ~ '\\s402:' OR message ILIKE '%InsufficientCredit%')::int AS credit_n,
+            count(*) FILTER (WHERE message LIKE 'Render submit failed [account:proxy]%'
+                                OR message ILIKE '%ProxyNotAllowed%')::int AS proxy_n,
             max(created_at) AS latest
           FROM events
           WHERE type = 'error'
@@ -290,21 +305,42 @@ export async function GET() {
   // response so nobody reads a healthy `remaining` as "renders are fine" again.
   if (process.env.OPUSCLIP_API_KEY) {
     const base = (process.env.OPUSCLIP_API_BASE ?? "https://api.opus.pro").replace(/\/$/, "");
-    const r = await timed(() => fetch(`${base}/api/api-usage?q=mine`, {
+    const r = await timed((signal) => fetch(`${base}/api/api-usage?q=mine`, {
       headers: { authorization: `Bearer ${process.env.OPUSCLIP_API_KEY}`, accept: "application/json" },
+      signal,
     }));
     report.opusclip = {
       ...r,
-      meter: "API rate cap only — NOT the plan's render balance. Submits can fail 402 "
-        + "InsufficientCreditError while this reads healthy; see renderSubmit for the truth.",
+      meter: "API rate cap. NOT the meter that bills a render — see renderBalanceMinutes below.",
     };
     if (!r.ok) problems.push(`OpusClip API: HTTP ${r.status} ${r.detail}`);
+
+    // THE RENDER BALANCE. The comment here used to say this endpoint "does NOT report the plan's
+    // render balance" — it does, as credits.remaining_minutes, and nothing read it. That is the
+    // number that decides whether a submit succeeds, and it was invisible for three weeks while
+    // the API cap beside it read 88,812 of 90,000 and everything looked fine.
+    try {
+      const usage = await opusclipUsage(process.env.OPUSCLIP_API_KEY ?? "", base);
+      report.renderBalanceMinutes = usage.balanceMinutes;
+      if (usage.balanceMinutes != null && usage.balanceMinutes < MIN_RENDER_BALANCE_MIN) {
+        problems.push(
+          `STALLED: OpusClip render balance is ${usage.balanceMinutes} minute(s) — no new render `
+          + `can succeed, and every submit will come back 402. This is a DIFFERENT meter from the `
+          + `API cap above, which reads ${usage.remaining ?? "?"} and is not evidence of anything. `
+          + `Top up the plan's processing minutes. Clips already rendered are unaffected: `
+          + `re-collect them from the dashboard, which costs nothing.`,
+        );
+      }
+    } catch {
+      report.renderBalanceMinutes = null; // no signal — never read as "no credits"
+    }
   }
 
   // 5. Live YouTube key/quota check (i18nLanguages = 1 quota unit).
   if (process.env.YOUTUBE_API_KEY) {
-    const r = await timed(() => fetch(
+    const r = await timed((signal) => fetch(
       `https://www.googleapis.com/youtube/v3/i18nLanguages?part=snippet&hl=en&key=${process.env.YOUTUBE_API_KEY}`,
+      { signal },
     ));
     report.youtube = r;
     if (!r.ok) problems.push(`YouTube API: HTTP ${r.status} ${r.detail.includes("quota") ? "quota exceeded" : r.detail}`);
@@ -312,8 +348,9 @@ export async function GET() {
 
   // 6. Live Anthropic key check (models list is free).
   if (process.env.ANTHROPIC_API_KEY) {
-    const r = await timed(() => fetch("https://api.anthropic.com/v1/models?limit=1", {
+    const r = await timed((signal) => fetch("https://api.anthropic.com/v1/models?limit=1", {
       headers: { "x-api-key": process.env.ANTHROPIC_API_KEY ?? "", "anthropic-version": "2023-06-01" },
+      signal,
     }));
     report.anthropic = { ok: r.ok, status: r.status };
     if (!r.ok) problems.push(`Anthropic API: HTTP ${r.status} ${r.detail}`);

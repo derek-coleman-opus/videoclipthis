@@ -3,7 +3,7 @@ import { db, candidates, runs } from "@/lib/db";
 import { getSettings, parseWatchChannels, parseSearchTopics, updateSummonState } from "@/lib/settings";
 import {
   DAILY_SOURCE_MINUTES_CAP, DEFAULT_THRESHOLD, MAX_CLIPS_PER_RUN, MAX_CONCURRENT_RENDERS,
-  MAX_SOURCE_MINUTES_PER_VIDEO, MAX_SUBMIT_ATTEMPTS, MIN_CREDITS_REMAINING,
+  MAX_SOURCE_MINUTES_PER_VIDEO, MAX_SUBMIT_ATTEMPTS, MIN_CREDITS_REMAINING, MIN_RENDER_BALANCE_MIN,
   RENDER_SUBMIT_MULTIPLIER, FIGURE_SEARCH_INTERVAL_H,
   SEARCH_TOPICS, SEARCH_BUDGET_PER_BURST, WATCHLIST,
 } from "./config";
@@ -131,9 +131,13 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   // Render backpressure: OpusClip caps concurrent projects, so only submit up to the number of
   // free slots. Candidates that pass the gate but can't fit are left "scored" and submitted on a
   // later run (drained newest-best-first below) — never over-submitted and burned.
+  // "collecting" counts too. It is a transient claim held by collectRenders(), but a run killed
+  // mid-collect (serverless timeout, deploy) leaves rows parked there for up to COLLECT_CLAIM_TTL_MIN.
+  // Counting only "rendering" treated those as free capacity and over-submitted past the concurrent
+  // limit OpusClip actually enforces — paying for renders the API was about to refuse.
   const inFlight = Number(
     (await database.select({ n: sql<number>`count(*)::int` })
-      .from(candidates).where(eq(candidates.status, "rendering")))[0]?.n ?? 0,
+      .from(candidates).where(inArray(candidates.status, ["rendering", "collecting"])))[0]?.n ?? 0,
   );
   // Hardening caps, enforced at SUBMIT time — because that is when OpusClip bills, at roughly
   // 1 credit per minute of source video. Posting caps (dailyClipCap + pacing) throttle output;
@@ -159,6 +163,15 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   ));
   if (slots === 0 && rendersToday >= dailySubmitCap) {
     await logEvent("run", `Daily render-submit cap reached (${rendersToday}/${dailySubmitCap}) — no new renders today`);
+  } else if (slots === 0 && inFlight >= MAX_CONCURRENT_RENDERS) {
+    // THE SILENT HALT. This branch logged nothing, and it is the one that actually stops the
+    // pipeline: MAX_CONCURRENT_RENDERS rows wedged in "rendering" means every submit below is
+    // skipped — the backlog drain included — on every run, forever, with no output anywhere.
+    // It is indistinguishable from "nothing worth clipping today" unless it says so.
+    await logEvent("error",
+      `No render slots: ${inFlight}/${MAX_CONCURRENT_RENDERS} are in flight and none finished, so `
+      + `NOTHING was submitted this run. If this repeats, those renders are wedged rather than slow `
+      + `— re-collect or fail them from the dashboard, or the pipeline cannot move.`);
   }
   if (slots > 0 && sourceMinutesToday >= DAILY_SOURCE_MINUTES_CAP) {
     slots = 0;
@@ -166,20 +179,32 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
       `Daily source-video budget reached (${Math.round(sourceMinutesToday)}/${DAILY_SOURCE_MINUTES_CAP} min ≈ credits) — no new renders today`);
   }
 
-  // Plan-level floor: don't start a render that could push the account past its monthly credits.
-  // Best-effort — an unreachable or unrecognized usage response must never stall the pipeline.
+  // Plan-level floor. Best-effort — an unreachable or unrecognized usage response must never
+  // stall the pipeline, so every unknown reads as "no signal", not as "no credits".
   //
-  // This reads the API RATE CAP, which is not the meter that bills a render: an account can be
-  // far above this floor and still have every submit answered 402 InsufficientCreditError. So this
-  // gate passing means nothing about whether renders will succeed — that case is caught at submit
-  // time by accountBlockKind() below, which is the only place it is visible.
+  // TWO SEPARATE METERS, and checking only the first was a real outage. `remaining` is the API
+  // RATE CAP; `balanceMinutes` is the processing balance a render is actually billed against. A
+  // live account read **4 minutes of balance against 88,812 of API cap** — so the old floor
+  // (remaining < 200) passed by a factor of four hundred while every submit came back 402
+  // InsufficientCreditError. The pipeline believed it was healthy and the dashboard agreed.
   if (slots > 0) {
     try {
       const usage = await opusclipUsage(opusKey, opusBase);
-      if (!usage.uncapped && usage.remaining != null && usage.remaining < MIN_CREDITS_REMAINING) {
+      // The balance first: it is the one that decides whether a render can happen at all.
+      if (usage.balanceMinutes != null && usage.balanceMinutes < MIN_RENDER_BALANCE_MIN) {
         slots = 0;
         await logEvent("error",
-          `OpusClip credits nearly exhausted (${usage.remaining} left of ${usage.limit ?? "?"}) — holding renders`);
+          `Render submit failed [account:credit] — OpusClip render balance is `
+          + `${usage.balanceMinutes} minute(s), below the `
+          + `${MIN_RENDER_BALANCE_MIN}-minute floor, so no new render can succeed and submitting `
+          + `would just collect 402s. THIS IS THE METER THAT BILLS: the API cap can read healthy `
+          + `(${usage.remaining ?? "?"} left) right next to an empty balance. Top up the plan's `
+          + `processing minutes. Already-rendered clips are unaffected — re-collect them from the `
+          + `dashboard, which costs nothing.`);
+      } else if (!usage.uncapped && usage.remaining != null && usage.remaining < MIN_CREDITS_REMAINING) {
+        slots = 0;
+        await logEvent("error",
+          `OpusClip API cap nearly exhausted (${usage.remaining} left of ${usage.limit ?? "?"}) — holding renders`);
       }
     } catch (e) {
       slog("opusclip_usage_check_failed", { error: (e as Error).message });
@@ -218,13 +243,20 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
 
     // Per-video ceiling. The daily cap above is an AGGREGATE and says nothing about one request:
     // OpusClip prices and refuses per video, so a single over-long source is rejected outright no
-    // matter how much daily budget is left. Leave it queued rather than failing it — the ceiling
-    // is an account-balance judgement, not a verdict on the video.
+    // matter how much daily budget is left.
+    //
+    // HELD, not left queued. "Queued" was a lie: the ceiling is a fixed constant, not a balance
+    // that recovers overnight, so the row was re-selected by the backlog drain on EVERY run,
+    // re-logged every 30 minutes forever, never submitted and never resolved — while still counting
+    // toward health's renderableQueue, so health reported a healthy supply made of rows that could
+    // not move. "held" is the state that already means "needs a human decision", it is excluded
+    // from the drain, and /api/admin/release-held is the way back once the ceiling is raised.
     if (minutes > MAX_SOURCE_MINUTES_PER_VIDEO) {
-      queued++;
-      await logEvent("scored",
-        `Queued — ${Math.round(minutes)} min source exceeds the ${MAX_SOURCE_MINUTES_PER_VIDEO} min `
-        + `per-video ceiling (OpusClip charges and refuses per video): ${c.title}`,
+      await database.update(candidates).set({ status: "held" }).where(eq(candidates.id, c.id));
+      await logEvent("held",
+        `HELD — ${Math.round(minutes)} min source exceeds the ${MAX_SOURCE_MINUTES_PER_VIDEO} min `
+        + `per-video ceiling (OpusClip charges and refuses per video): ${c.title}. Raise `
+        + `MAX_SOURCE_MINUTES_PER_VIDEO and release it from /api/admin/release-held to clip it.`,
         "candidates", c.id);
       return;
     }
@@ -269,9 +301,18 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
           creditWallHit = true;
           // The "Render submit failed" prefix is load-bearing: /api/admin/diagnostics counts
           // these by prefix to report render trouble. Keep it if you reword the rest.
+          // The [account:…] marker is MACHINE-READ by health.ts and /api/admin/diagnostics, which
+          // is the whole point: accountBlockKind() has the error object in hand and already knows
+          // whether this is a 402 or a 403, and that verdict used to be thrown away before it
+          // reached the log. Both readers then re-guessed it from the message text — health.ts by
+          // matching the bare "Render submit failed" prefix, which EVERY submit failure writes, so
+          // one candidate with a bad URL raised "nothing can enter the render queue … check the
+          // account" and sent the operator to their billing page. Classify once, at the point of
+          // failure; do not re-derive it downstream.
           await logEvent("error",
-            `Render submit failed — ${accountBlockNote(block)} Keeping this candidate queued with no `
-            + `attempt consumed, so the backlog survives: ${(e as Error).message}`,
+            `Render submit failed [account:${block}] — ${accountBlockNote(block)} Keeping this `
+            + `candidate queued with no attempt consumed, so the backlog survives: `
+            + `${(e as Error).message}`,
             "candidates", c.id);
         }
         return;

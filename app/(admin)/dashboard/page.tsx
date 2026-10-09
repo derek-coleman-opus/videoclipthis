@@ -1,8 +1,9 @@
-import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, isNull, notLike, sql } from "drizzle-orm";
 import { db, candidates, clips, events, runs } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import RunButton from "@/components/RunButton";
 import RequeueButton from "@/components/RequeueButton";
+import RecollectButton from "@/components/RecollectButton";
 import { computeHealth } from "@/lib/pipeline/health";
 import DbError from "@/components/DbError";
 import { withSchemaHeal } from "@/lib/db/ensureSchema";
@@ -50,6 +51,11 @@ async function loadData() {
     // recovery is a button rather than SQL the operator has to be told about.
     const stranded = Number((await d.select({ n: one }).from(candidates)
       .where(and(eq(candidates.status, "failed"), isNull(candidates.opusProjectId))))[0]?.n ?? 0);
+    // The other half of the same wound, and the expensive one: these DO have a project id, so they
+    // were billed, rendered, and then never harvested. Requeue deliberately excludes them (it would
+    // pay twice) and /api/admin/force 409s on them, which left them reachable by nothing at all.
+    const uncollected = Number((await d.select({ n: one }).from(candidates)
+      .where(and(eq(candidates.status, "failed"), isNotNull(candidates.opusProjectId))))[0]?.n ?? 0);
     // The same verdict the /api/health monitor reads, rendered where the operator already looks.
   // Failing to compute it must never blank the dashboard, so it degrades to "unknown".
   let health: Awaited<ReturnType<typeof computeHealth>> | null = null;
@@ -58,10 +64,16 @@ async function loadData() {
   } catch {
     health = null;
   }
-  const recent = await d.select().from(events).orderBy(desc(events.createdAt)).limit(30);
+  // PIPELINE events only. Four xbot crons write constantly (one every 30 min), and with a flat
+  // limit of 30 they flushed pipeline errors off this feed within hours — the operator was looking
+  // at a healthy-looking wall of xbot chatter while the clip pipeline was dead underneath it.
+  // xbot has its own panel; this feed answers "is the clip pipeline working?".
+  const recent = await d.select().from(events)
+    .where(notLike(events.type, "xbot\\_%"))
+    .orderBy(desc(events.createdAt)).limit(30);
     const lastRun = (await d.select().from(runs).orderBy(desc(runs.startedAt)).limit(1))[0];
     const cfg = await getSettings();
-    return { totalFound, posted, postedToday, pending, queued, reshared, stranded, health, recent, lastRun, cfg };
+    return { totalFound, posted, postedToday, pending, queued, reshared, stranded, uncollected, health, recent, lastRun, cfg };
   });
 }
 
@@ -72,7 +84,7 @@ export default async function Dashboard() {
   } catch (e) {
     return <DbError error={e} />;
   }
-  const { totalFound, posted, postedToday, pending, queued, reshared, stranded, health, recent, lastRun, cfg } = data;
+  const { totalFound, posted, postedToday, pending, queued, reshared, stranded, uncollected, health, recent, lastRun, cfg } = data;
 
   return (
     <div className="space-y-6">
@@ -115,6 +127,7 @@ export default async function Dashboard() {
           because an empty render queue is the one condition where every number below reads normal
           and nothing posts anyway. */}
       <RequeueButton count={stranded} />
+      <RecollectButton count={uncollected} />
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <StatCard label="Posted today" value={`${postedToday} / ${cfg.dailyClipCap ?? 6}`} hint="auto-post cap" />
