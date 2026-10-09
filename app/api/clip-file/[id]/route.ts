@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 /** A STABLE URL for a clip's video, which the signed CDN URL is not.
  *
  *  Every public surface links here instead of embedding `clips.clipUrl` directly, because that
- *  column holds a signed URL that dies in about a day while the pages that replay it live
+ *  column holds a signed URL that dies in ~59h while the pages that replay it live
  *  forever. This re-mints the URL when it has gone stale (free — see lib/pipeline/clipFile.ts)
  *  and redirects.
  *

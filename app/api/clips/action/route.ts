@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
     try {
       requireXEnv();
       // RE-MINT BEFORE PUBLISHING, for the same reason the automatic drain does: the stored URL
-      // is signed and expires in about a day. This route is the RETRY path — it is reached by a
+      // is signed and expires in ~59h. This route is the RETRY path — it is reached by a
       // human looking at a clip that has been sitting in review or in `failed`, which is to say
       // precisely the clips whose URL is most likely already dead. Replaying it made every
       // manual retry on a day-old clip fail forever, with the operator re-clicking a button that

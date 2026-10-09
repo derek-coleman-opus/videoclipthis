@@ -287,7 +287,7 @@ export async function collectRenders(): Promise<CollectResult> {
       const chosen = clipsReady[verdict?.pick ?? 0] ?? clipsReady[0];
 
       // EXPORT THE ONE CLIP WE ARE ABOUT TO POST. Clips are preview-only until exported, and the
-      // preview's signed URL dies in about a day — fine for an immediate upload to X, fatal for
+      // preview's signed URL dies in ~59h — fine for an immediate upload to X, fatal for
       // clips.clipUrl, which the public /clips, /clips/[id], /speakers/[slug] and /posts pages
       // replay as a <video src> indefinitely. Exporting here rather than in the fetch loop means
       // one export per POSTED clip instead of one per clip in the project.
@@ -345,7 +345,7 @@ export async function collectRenders(): Promise<CollectResult> {
         await logEvent("error",
           `Posting "${row.title}" from a SHORT-LIVED preview URL because the export was `
           + `unavailable (${urlNote}). The post will be fine; the clip on the public pages will `
-          + `stop playing in about a day. Confirm the export endpoint at `
+          + `stop playing within about two days. Confirm the export endpoint at `
           + `/api/debug/opusclip?projectId=${row.opusProjectId}.`,
           "candidates", row.id);
       }

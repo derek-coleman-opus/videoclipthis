@@ -1,12 +1,12 @@
 // Fresh video URLs for clips, on demand.
 //
 // WHY THIS EXISTS. OpusClip hands out SIGNED CDN URLS — both the preview and the HD export carry
-// `?Expires=<epoch>`, and measured against a live account the two were 95 seconds apart, roughly
-// one day out. `clips.clipUrl` is written exactly once at collect time and then replayed forever:
+// `?Expires=<epoch>`, and measured against a live account the two were 95 seconds apart, about
+// 59 hours out — measured, not assumed. `clips.clipUrl` is written exactly once at collect time and then replayed forever:
 // by the public library (/clips, /clips/[id], /speakers/[slug]), by the homepage showcase, by the
 // admin review player, by the JSON-LD contentUrl fed to Google, and by every publish that happens
 // later than the collect (a manual approve, or a drain held behind the daily cap). All of those
-// were dead about a day after the clip was made.
+// were dead about two and a half days after the clip was made.
 //
 // The fix is not to find a durable URL — there isn't one. It is to stop treating a signed URL as
 // a persistent identifier. `clips.opusClipId` plus `candidates.opusProjectId` are stable, and an
@@ -20,8 +20,12 @@ import { db, candidates, clips } from "@/lib/db";
 import { opusclipExportClip } from "./opusclip";
 import { slog } from "./util";
 
-/** How long a stored signed URL is assumed good. Well inside the ~24h signature so a clip is
- *  never published on a URL about to die mid-upload. */
+/** How long a stored signed URL is assumed good.
+ *
+ *  MEASURED, not guessed: a captured pair expired 2026-10-10T16:41:30Z and 16:43:05Z against
+ *  a mint time of 2026-10-08T05:20:34Z — a ~59-hour signature, not the ~24h first assumed. An
+ *  hour of margin keeps a clip from being published on a URL about to die mid-upload, and the
+ *  number is deliberately far below 59h so the window stays right if the vendor shortens it. */
 const URL_TRUST_WINDOW_MS = Number(process.env.CLIP_URL_TRUST_MIN ?? 60) * 60 * 1000;
 
 /** Read the `Expires=<epoch>` a signed OpusClip CDN URL carries, when it has one. */
