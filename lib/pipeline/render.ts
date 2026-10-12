@@ -11,12 +11,13 @@
 // project's renders, picks the best, writes the pull quote, and vetoes clips too boring to post.
 // A vetoed clip is queued for review, never deleted — the render is already paid for.
 
-import { and, desc, eq, gte, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { db, candidates, clips, summonRequests, type Candidate, type Clip, type Settings } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import { findProfile } from "./audience";
 import { MIN_CLIP_POST_GAP_MIN } from "./config";
-import { opusclipFetchClips, type OpusClipResult } from "./opusclip";
+import { opusclipExportClip, opusclipFetchClips, type OpusClipResult } from "./opusclip";
+import { freshClipUrl } from "./clipFile";
 import { crossPostClip } from "./crosspost";
 import { screenClipForAutoPost } from "./clipSafety";
 import {
@@ -30,8 +31,13 @@ import { logEvent } from "./events";
 import { slog } from "./util";
 import type { DetectedCandidate, Moment } from "./types";
 
-/** Give a render this long AFTER SUBMISSION before declaring it dead. */
-const RENDER_TIMEOUT_H = Number(process.env.RENDER_TIMEOUT_H ?? 2);
+/** Give a render this long AFTER SUBMISSION before declaring it dead.
+ *
+ *  Covers TWO stages, which is why it is no longer 2h: OpusClip renders the clips, and then the
+ *  clip the editor picks is exported on demand (see opusclipExportClip). An export that is still
+ *  rendering defers the candidate to the next collect cycle, up to 30 minutes later, so a budget
+ *  sized for the first stage alone could expire a candidate that was progressing normally. */
+const RENDER_TIMEOUT_H = Number(process.env.RENDER_TIMEOUT_H ?? 4);
 
 /** How long a "collecting" claim may be held before it is assumed stranded and released.
  *  A real collect takes seconds (one OpusClip check + one editor call); this is far above that and
@@ -42,6 +48,20 @@ const COLLECT_CLAIM_TTL_MIN = Number(process.env.COLLECT_CLAIM_TTL_MIN ?? 15);
 /** Pending-review clips older than this are stale — the moment has passed, so expire them
  *  (we only want to post NEW content). Env-overridable. */
 export const CLIP_REVIEW_TTL_H = Number(process.env.CLIP_REVIEW_TTL_H ?? 6);
+
+/** Clip states that must STOP a candidate producing another clip.
+ *
+ *  Read it as "a post exists, might exist, or was deliberately killed":
+ *    posted/posting  — it is live, or a publish is in flight
+ *    unverified      — the outcome is unknown; a second clip is exactly the double-post we avoid
+ *    rejected        — a human said no, and a re-collect must not overrule them
+ *    pending_review/approved — a live clip is already queued for this candidate
+ *
+ *  Deliberately ABSENT: `expired` and `failed`. Both mean a paid render produced nothing posted
+ *  and nobody chose to kill it, so both must be able to try again. */
+const CLIP_BLOCKS_RECOLLECT = [
+  "pending_review", "approved", "posting", "posted", "unverified", "rejected",
+];
 
 export interface CollectResult {
   checked: number;
@@ -80,13 +100,16 @@ function toDetected(row: Candidate): DetectedCandidate {
   };
 }
 
-function toMoment(best: OpusClipResult): Moment {
+/** `url` is passed in rather than read off the clip because the clip carries TWO urls with very
+ *  different lifetimes (a durable export and a short-lived preview) and the choice between them is
+ *  the caller's, made explicitly and logged. Burying it in here is how the wrong one gets persisted. */
+function toMoment(best: OpusClipResult, url: string): Moment {
   return {
     startS: best.startS,
     endS: best.endS,
     hookCaption: best.caption || "the moment worth watching",
     confidence: Math.min(1, best.score / 100),
-    clipUrl: best.clipUrl,
+    clipUrl: url,
     costUsd: best.costUsd,
   };
 }
@@ -147,6 +170,14 @@ export async function collectRenders(): Promise<CollectResult> {
 
   let collected = 0;
   let failed = 0;
+  // Why a cycle produced nothing. Every one of these paths used to `continue` with no logEvent and
+  // no slog, so a candidate could loop here every 30 minutes for the full RENDER_TIMEOUT_H window
+  // emitting absolutely nothing, then mark itself failed. Three weeks of "why is it not posting?"
+  // came down to this silence. Counted here and reported ONCE per cycle below — per-candidate
+  // logging would flood the very feed that has to stay readable.
+  let stillRendering = 0;
+  let oldestWaitMs = 0;
+  const checkErrors: string[] = [];
 
   for (const row of inFlight) {
     // CLAIM IT FIRST, for the same reason the posting drain does: scout and summon are both on
@@ -182,13 +213,19 @@ export async function collectRenders(): Promise<CollectResult> {
       try {
         const res = await opusclipFetchClips(row.opusProjectId as string, apiKey, base);
         returnedClips = res.clips.length;
-        clipsReady = res.clips.filter((c) => c.clipUrl && !c.renderPending).sort((a, b) => b.score - a.score);
+        // "Ready to judge" is a FINISHED RENDER, which means a preview exists — the export has not
+        // been requested yet at this point and never appears on its own. Filtering on clipUrl here
+        // (export-only) left clipsReady permanently empty, which is the outage.
+        clipsReady = res.clips
+          .filter((c) => (c.clipUrl || c.previewUrl) && !c.renderPending)
+          .sort((a, b) => b.score - a.score);
         done = res.done;
       } catch (e) {
         // Transient check failure: leave it rendering unless it's already stale. Releasing the claim
         // matters — a row left "collecting" is in no query and would never be retried.
         if (!expired) {
           await database.update(candidates).set({ status: "rendering" }).where(eq(candidates.id, row.id));
+          checkErrors.push(`"${row.title}": ${(e as Error).message}`);
           continue;
         }
         await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, row.id));
@@ -218,6 +255,8 @@ export async function collectRenders(): Promise<CollectResult> {
         } else {
           // Release the claim so the next run picks it up again.
           await database.update(candidates).set({ status: "rendering" }).where(eq(candidates.id, row.id));
+          stillRendering++;
+          oldestWaitMs = Math.max(oldestWaitMs, ageMs);
         }
         continue;
       }
@@ -246,7 +285,71 @@ export async function collectRenders(): Promise<CollectResult> {
         })),
       });
       const chosen = clipsReady[verdict?.pick ?? 0] ?? clipsReady[0];
-      const moment = toMoment(chosen);
+
+      // EXPORT THE ONE CLIP WE ARE ABOUT TO POST. Clips are preview-only until exported, and the
+      // preview's signed URL dies in ~59h — fine for an immediate upload to X, fatal for
+      // clips.clipUrl, which the public /clips, /clips/[id], /speakers/[slug] and /posts pages
+      // replay as a <video src> indefinitely. Exporting here rather than in the fetch loop means
+      // one export per POSTED clip instead of one per clip in the project.
+      let clipUrl = chosen.clipUrl;
+      let urlNote = "";
+      if (!clipUrl) {
+        const exported = await opusclipExportClip(row.opusProjectId as string, chosen.clipId, apiKey, base);
+        if (exported.status === "ready" && exported.url) {
+          clipUrl = exported.url;
+        } else if (exported.status === "rendering") {
+          // Not a failure — the export was started and needs a moment. Put the candidate back and
+          // let the next cycle pick it up; nothing is lost and nothing ephemeral gets persisted.
+          //
+          // `expired` is checked here for the same reason every other release path checks it: a
+          // release that ignores the timeout clock makes the candidate IMMORTAL. It would come
+          // back every cycle forever, and — because "rendering" counts against
+          // MAX_CONCURRENT_RENDERS — permanently eat one of the three submit slots. Three exports
+          // that never reach "ready" would wedge the whole pipeline with no way out.
+          if (expired) {
+            await database.update(candidates).set({ status: "failed" }).where(eq(candidates.id, row.id));
+            await logEvent("error",
+              `Export for "${row.title}" never became ready within ${RENDER_TIMEOUT_H}h. The render `
+              + `is paid for and still exists — re-collect it from the dashboard once the export `
+              + `clears.`, "candidates", row.id);
+            failed++;
+            continue;
+          }
+          await database.update(candidates).set({ status: "rendering" }).where(eq(candidates.id, row.id));
+          await logEvent("run",
+            `Export started for "${row.title}" — collecting it on the next cycle.`,
+            "candidates", row.id);
+          continue;
+        } else {
+          // Export unavailable: post the preview rather than drop a paid render on the floor, but
+          // say so, because the stored URL will stop playing on the public pages within a day.
+          urlNote = exported.detail;
+          clipUrl = chosen.previewUrl;
+        }
+      }
+      if (!clipUrl) {
+        // Same immortality hazard as above: without the expiry check this candidate is retried
+        // forever while holding a concurrency slot.
+        await database.update(candidates)
+          .set({ status: expired ? "failed" : "rendering" })
+          .where(eq(candidates.id, row.id));
+        if (expired) failed++;
+        await logEvent("error",
+          `No usable video URL for "${row.title}" — neither an export nor a preview`
+          + `${expired ? ` after ${RENDER_TIMEOUT_H}h, giving up` : ", will retry"}. `
+          + `${urlNote || "Inspect the raw response at /api/debug/opusclip?projectId=" + row.opusProjectId}`,
+          "candidates", row.id);
+        continue;
+      }
+      if (urlNote) {
+        await logEvent("error",
+          `Posting "${row.title}" from a SHORT-LIVED preview URL because the export was `
+          + `unavailable (${urlNote}). The post will be fine; the clip on the public pages will `
+          + `stop playing within about two days. Confirm the export endpoint at `
+          + `/api/debug/opusclip?projectId=${row.opusProjectId}.`,
+          "candidates", row.id);
+      }
+      const moment = toMoment(chosen, clipUrl);
       const d = toDetected(row);
       // Summon clips are in-thread comments (credit the video author, no link back);
       // scout clips are standalone credit-first posts with the source link in a follow-up.
@@ -287,12 +390,22 @@ export async function collectRenders(): Promise<CollectResult> {
         }
       }
 
-      // One clip per candidate. The claim above makes a concurrent duplicate very unlikely, and the
-      // partial unique index makes it impossible; this check turns what would be a constraint
+      // One LIVE clip per candidate. The claim above makes a concurrent duplicate very unlikely, and
+      // the partial unique index makes it impossible; this check turns what would be a constraint
       // violation into a clean skip, and also covers a candidate re-entering the loop after a
       // crash between the insert and the status update.
+      //
+      // The status predicate matters: without it, ANY existing clip row blocked a replacement
+      // forever, including a clip that had been expired by the review TTL or had failed to publish
+      // on a dead URL. The candidate was then set to "selected" and the paid render was gone for
+      // good. Only states where a post exists, may exist, or was deliberately killed block a
+      // retry — `expired` and `failed` are precisely the cases a re-collect is meant to rescue.
       const already = await database
-        .select({ id: clips.id }).from(clips).where(eq(clips.candidateId, row.id)).limit(1);
+        .select({ id: clips.id }).from(clips)
+        .where(and(
+          eq(clips.candidateId, row.id),
+          inArray(clips.status, CLIP_BLOCKS_RECOLLECT),
+        )).limit(1);
       if (already.length) {
         await database.update(candidates).set({ status: "selected" }).where(eq(candidates.id, row.id));
         slog("collect_skip_duplicate", { candidateId: row.id, existingClipId: already[0].id });
@@ -342,6 +455,27 @@ export async function collectRenders(): Promise<CollectResult> {
         "candidates", row.id);
     }
 }
+
+  // ONE line per cycle saying why nothing came out, when nothing came out. The individual paths
+  // above deliberately stay quiet (they repeat every 30 min per candidate); this is the aggregate
+  // that makes a stall visible on the dashboard the same day instead of never.
+  if (checkErrors.length) {
+    await logEvent("error",
+      `OpusClip status check failed for ${checkErrors.length} in-flight render(s) — still retrying, `
+      + `but they will be marked failed after ${RENDER_TIMEOUT_H}h if this does not clear. `
+      + `First: ${checkErrors[0]}`);
+  }
+  if (stillRendering && !collected) {
+    const oldestH = (oldestWaitMs / 3600_000).toFixed(1);
+    const nearTimeout = oldestWaitMs > RENDER_TIMEOUT_H * 3600_000 * 0.5;
+    await logEvent(nearTimeout ? "error" : "run",
+      `${stillRendering} render(s) still in flight and none ready to collect — oldest has been `
+      + `waiting ${oldestH}h of its ${RENDER_TIMEOUT_H}h budget.`
+      + (nearTimeout
+        ? ` That is over halfway, which usually means the clips ARE finished and this client cannot `
+          + `read the URL field. Check the raw response at /api/debug/opusclip?projectId=…`
+        : ""));
+  }
 
   // Drain the posting queue: publish "approved" clips under the daily cap + pacing.
   const posted = await drainApprovedClips(cfg);
@@ -394,6 +528,10 @@ export async function drainApprovedClips(cfg?: Settings): Promise<number> {
   );
 
   let posted = 0;
+  // Both gates used to be a silent `break`. A queue that was full but completely stationary looked
+  // identical to an empty one from outside — no event, no slog, nothing on the dashboard.
+  let capHeld = 0;
+  let paceHeld = 0;
   for (const clip of queue) {
     // CLAIM IT FIRST. The scout and summon crons are both on */30 and both call this, and a manual
     // "Run Scout now" can overlap either — so a plain select-then-publish let two runs pick up the
@@ -406,11 +544,21 @@ export async function drainApprovedClips(cfg?: Settings): Promise<number> {
     // unknown", telling the operator to check the timeline for a post that was never attempted.
     // One clip per cycle went quietly into that dead end instead of waiting its turn.
     // A claim is only worth taking for a clip actually about to publish.
+    // `continue`, NOT `break`. The queue is ordered by createdAt and mixes scout and summon clips,
+    // so a `break` on a scout clip that hit the cap also abandoned every summon clip behind it —
+    // silently defeating the exemption this very branch exists to grant ("a human asked"). Skipping
+    // the one clip that is gated lets the rest of the queue through.
     const isSummon = clip.kind === "summon";
     if (!isSummon) {
-      if (scoutPostedToday >= settings.dailyClipCap) break; // cap reached — rest wait for tomorrow
+      if (scoutPostedToday >= settings.dailyClipCap) {
+        capHeld++;
+        continue; // cap reached — this one waits for tomorrow
+      }
       const gapMs = MIN_CLIP_POST_GAP_MIN * 60 * 1000;
-      if (lastPostedAt && Date.now() - lastPostedAt < gapMs) break; // paced — next cycle picks it up
+      if (lastPostedAt && Date.now() - lastPostedAt < gapMs) {
+        paceHeld++;
+        continue; // paced — next cycle picks it up
+      }
     }
 
     const claimed = await database.update(clips)
@@ -420,9 +568,15 @@ export async function drainApprovedClips(cfg?: Settings): Promise<number> {
     if (!claimed.length) continue; // another run already has it
 
     try {
+      // RE-MINT BEFORE PUBLISHING. clip.clipUrl was signed at collect time and expires in about a
+      // day, while this drain deliberately holds clips: behind the daily cap they wait for
+      // tomorrow, and behind the pacing gap they wait a cycle. A clip queued on Monday and
+      // released on Wednesday published a dead URL and failed permanently — the cap turning
+      // healthy clips into failures. Re-exporting is free and idempotent.
+      const fresh = await freshClipUrl(clip.id);
       const res = await xPublisher().publish(
         {
-          clipUrl: clip.clipUrl ?? "",
+          clipUrl: fresh ?? clip.clipUrl ?? "",
           postText: clip.postText,
           costUsd: clip.costUsd ?? 0,
           durationS: Math.max(0, Math.round((clip.endS ?? 0) - (clip.startS ?? 0))),
@@ -458,6 +612,17 @@ export async function drainApprovedClips(cfg?: Settings): Promise<number> {
         "clips", clip.id);
       // Keep draining the rest — one bad clip (e.g. an expired asset URL) shouldn't block the queue.
     }
+  }
+
+  // Say so when the queue is full but held. "Nothing posted" and "nothing to post" are completely
+  // different problems and they used to look identical from the outside.
+  if (!posted && (capHeld || paceHeld)) {
+    await logEvent("run",
+      capHeld
+        ? `${capHeld} clip(s) ready but held: today's cap of ${settings.dailyClipCap} scout post(s) `
+          + `is used up. They post tomorrow — raise dailyClipCap in Settings to let more through.`
+        : `${paceHeld} clip(s) ready but held: the minimum ${MIN_CLIP_POST_GAP_MIN}-minute gap `
+          + `between posts has not elapsed. The next cycle will post one.`);
   }
   return posted;
 }

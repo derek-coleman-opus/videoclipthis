@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { db, candidates, summonRequests } from "@/lib/db";
 import { requireScoutEnv, requireXEnv, requireXReadEnv } from "./env";
 import { getSettings, updateSummonState } from "@/lib/settings";
@@ -64,9 +64,11 @@ export async function runSummon(): Promise<SummonResult> {
   // Summon shares OpusClip's concurrent-render budget with Scout. Only take as many mentions
   // as there are free slots; the cursor stops before unhandled ones, so they're retried next
   // poll (15 min) instead of failing the create call and dropping the user's request.
+  // Counts "collecting" as well as "rendering", for the same reason runScout does: a claim left
+  // behind by a killed collect run is occupied capacity, not free capacity.
   const inFlight = Number(
     (await database.select({ n: sql<number>`count(*)::int` })
-      .from(candidates).where(eq(candidates.status, "rendering")))[0]?.n ?? 0,
+      .from(candidates).where(inArray(candidates.status, ["rendering", "collecting"])))[0]?.n ?? 0,
   );
   let slots = Math.max(0, MAX_CONCURRENT_RENDERS - inFlight);
 

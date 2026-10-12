@@ -4,6 +4,7 @@ import { db, clips } from "@/lib/db";
 import { requireXEnv } from "@/lib/pipeline/env";
 import { logEvent } from "@/lib/pipeline/events";
 import { markClipPosted } from "@/lib/pipeline/render";
+import { freshClipUrl } from "@/lib/pipeline/clipFile";
 import { xPublisher } from "@/lib/pipeline/publishing";
 import { withSchemaHeal } from "@/lib/db/ensureSchema";
 
@@ -32,7 +33,14 @@ export async function POST(req: NextRequest) {
     // "unverified" is included deliberately: the AUTOMATIC drain never touches it (that is the whole
   // point — the outcome was ambiguous and a retry could double-post), but a human who has checked
   // the timeline must be able to resolve it either way. The fail reason tells them to look first.
-  const actionable = ["pending_review", "failed", "approved", "unverified"].includes(clip.status);
+  //
+  // "expired" is included for a different reason: expireStaleClips() moves a review clip here after
+  // CLIP_REVIEW_TTL_H, and this list was the ONLY thing standing between the operator and a render
+  // they had already paid for. Omitted, it made `expired` unreachable by the pipeline (nothing
+  // selects it) AND by the human (409 here) AND invisible on /posts — a paid clip that could not be
+  // approved, rejected, or even seen. Staleness is a reason to default to NOT posting it, never a
+  // reason to take the choice away.
+  const actionable = ["pending_review", "failed", "approved", "unverified", "expired"].includes(clip.status);
     if (!actionable) {
       return NextResponse.json({ ok: false, error: `clip is ${clip.status}` }, { status: 409 });
     }
@@ -51,9 +59,16 @@ export async function POST(req: NextRequest) {
 
     try {
       requireXEnv();
+      // RE-MINT BEFORE PUBLISHING, for the same reason the automatic drain does: the stored URL
+      // is signed and expires in ~59h. This route is the RETRY path — it is reached by a
+      // human looking at a clip that has been sitting in review or in `failed`, which is to say
+      // precisely the clips whose URL is most likely already dead. Replaying it made every
+      // manual retry on a day-old clip fail forever, with the operator re-clicking a button that
+      // could not work.
+      const fresh = await freshClipUrl(id);
       const result = await xPublisher().publish(
         {
-          clipUrl: clip.clipUrl ?? "",
+          clipUrl: fresh ?? clip.clipUrl ?? "",
           postText,
           costUsd: clip.costUsd ?? 0,
           durationS: Math.max(0, Math.round((clip.endS ?? 0) - (clip.startS ?? 0))),

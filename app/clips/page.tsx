@@ -58,7 +58,7 @@ export default async function ClipsIndexPage() {
               <Link href={`/clips/${c.id}`} className="group">
                 {c.clipUrl && (
                   <video
-                    src={c.clipUrl}
+                    src={`/api/clip-file/${c.id}`}
                     muted
                     playsInline
                     preload="metadata"

@@ -24,7 +24,8 @@ export interface OpusClipResult {
   endS: number;
   score: number;   // virality score (0-99)
   caption: string; // clip title (used as the hook)
-  clipUrl: string; // rendered clip export URL (MP4)
+  clipUrl: string; // DURABLE export URL (MP4) — empty until the clip is exported
+  previewUrl: string; // short-lived signed preview MP4; always present once rendering finishes
   costUsd: number; // credit-based billing — always 0 here
   renderPending: boolean;
 }
@@ -65,14 +66,21 @@ async function opusFetch(
 // ── Plan usage (the credit meter that actually bills) ───────────────────────
 
 export interface OpusUsage {
-  /** Credits consumed in the current billing month. */
+  /** API-CAP credits consumed this billing month. An allowance, NOT the render balance. */
   used: number | null;
-  /** Monthly credit allowance. */
+  /** Monthly API-cap allowance. */
   limit: number | null;
-  /** limit - used, when both are known. */
+  /** limit - used, when both are known. STILL THE API CAP — see balanceMinutes. */
   remaining: number | null;
-  /** True when the workspace is exempt from caps — treat as unlimited headroom. */
+  /** True when the workspace is exempt from caps — treat as unlimited API-cap headroom. */
   uncapped: boolean;
+  /** THE METER THAT ACTUALLY BILLS A RENDER: processing minutes left on the plan.
+   *
+   *  This is the number a submit is checked against, and it is completely independent of the API
+   *  cap above. A live account read 4 minutes here while `remaining` read 88,812 — so a floor on
+   *  `remaining` passes cheerfully while every single submit comes back 402. null when the
+   *  response does not carry it; callers must treat null as "no signal", never as "no credits". */
+  balanceMinutes: number | null;
 }
 
 /** Read the org's credit meter. Field names vary across response shapes, so pick defensively and
@@ -88,11 +96,15 @@ export async function opusclipUsage(apiKey: string, base: string): Promise<OpusU
   const used = num(monthly?.used ?? monthly?.usedCredits ?? monthly?.creditsUsed);
   const limit = num(monthly?.limit ?? monthly?.quota ?? monthly?.creditLimit);
   const remainingRaw = num(monthly?.remaining ?? monthly?.creditsRemaining);
+  // credits.remaining_minutes, confirmed against a live response.
+  const credits = d.credits ?? {};
+  const balanceMinutes = num(credits?.remaining_minutes ?? credits?.remainingMinutes ?? credits?.minutes);
   return {
     used,
     limit,
     remaining: remainingRaw ?? (used != null && limit != null ? limit - used : null),
     uncapped: Boolean(d.uncapped ?? monthly?.uncapped ?? false),
+    balanceMinutes,
   };
 }
 
@@ -194,7 +206,11 @@ export type AccountBlock = "credit" | "proxy";
 export function accountBlockKind(e: unknown): AccountBlock | null {
   const m = (e as Error)?.message ?? String(e);
   if (/\s402:/.test(m) || /InsufficientCredit/i.test(m)) return "credit";
-  if (/ProxyNotAllowed/i.test(m)) return "proxy";
+  // The 403 STATUS counts, not only the body text. Detecting this by body string alone meant a
+  // 403 with a reworded or non-JSON body was misclassified as a per-candidate failure, consumed a
+  // submit attempt, and — three runs in — pushed the whole backlog to `failed`. That regression
+  // has already happened once on this repo.
+  if (/ProxyNotAllowed/i.test(m) || /\s403:/.test(m)) return "proxy";
   return null;
 }
 
@@ -222,48 +238,73 @@ export async function opusclipCreateProject(
     { retry: false }, // billed + non-idempotent — never auto-repeat (see opusFetch)
   );
   const proj = data.data ?? data.project ?? data;
-  const id = String(proj?.id ?? proj?.projectId ?? "");
+  // `project_id` first: the live data model is snake_case throughout (clip_id, duration_sec,
+  // preview_url, remaining_minutes). Missing it here is the expensive kind of miss — the project
+  // has ALREADY been created and billed by the time this parses, and a throw is classified
+  // non-retryable, so the id is lost and the paid project is unreachable forever.
+  const id = String(proj?.project_id ?? proj?.id ?? proj?.projectId ?? "");
   if (!id) throw new Error(`OpusClip: no project id in create response: ${JSON.stringify(data).slice(0, 300)}`);
   return id;
 }
 
 function asArray(data: any): any[] {
   if (Array.isArray(data)) return data;
-  return data?.data?.list ?? (Array.isArray(data?.data) ? data.data : null) ?? data?.clips ?? data?.list ?? [];
+  // `data.clips` was missing, which is the envelope every other function in this file assumes
+  // (`data.data ?? data`) combined with the key the live response actually uses. Bottoming out at
+  // [] here is indistinguishable from "still rendering", so a shape miss reproduces the original
+  // three-week outage exactly: no clips, no error, no signal.
+  return data?.data?.list
+    ?? data?.data?.clips
+    ?? (Array.isArray(data?.data) ? data.data : null)
+    ?? data?.clips ?? data?.list ?? [];
 }
 
-// Field names verified against OpusClip's CLI clip schema: the rendered MP4 is `uriForExport`,
-// and a clip is still rendering when `renderAsVideoFile.pending === true` (NOT a top-level
-// `render_pending`). durationMs is the clip length; source start/end isn't exposed, and we post
-// the rendered file (not a time range), so start/end are cosmetic — derive from duration.
+// WHAT IS ACTUALLY CONFIRMED, and what is not.
+//
+// This block used to claim every field name here was "verified against OpusClip's reference CLI".
+// It was not, and the claim is what kept the bug alive: three weeks of review all stopped at a
+// comment asserting the answer. Observed from a real project (P3100504VPJi, stage COMPLETE, 17
+// clips): the listed clips carry a PREVIEW url and no export field whatsoever. Everything else
+// below is a defensive guess, deliberately written as a fallback chain so a wrong guess degrades
+// to a usable default instead of silently producing "" or 0.
+//
+// Start/end are cosmetic: the source range is not exposed and we post the rendered file, not a
+// time range, so they are derived from the clip duration.
 function normalizeClip(c: any): OpusClipResult {
   const durationS = c.durationMs != null ? Number(c.durationMs) / 1000 : Number(c.duration_sec ?? c.durationSec ?? 0);
   return {
-    clipId: String(c.id ?? c.clipId ?? c.curationId ?? ""),
+    // `clip_id` is the real field, CONFIRMED against a live response. This read
+    // `id ?? clipId ?? curationId`, none of which exist, so clipId was "" for every clip —
+    // which nulled clips.opusClipId (breaking cross-posting) and, worse, made the export call
+    // below a guaranteed no-op, since exporting needs the clip id. `curationId` is a different
+    // id space entirely and never belonged in this chain.
+    clipId: String(c.clip_id ?? c.clipId ?? c.id ?? ""),
     startS: 0,
     endS: durationS,
     score: Number(c.score ?? c.judgeResult?.hookScore ?? 0),
     caption: String(c.title ?? c.description ?? ""),
     // THE RENDERED FILE'S URL, under every name OpusClip has used for it.
     //
-    // This read `uriForExport ?? export_url` only. Neither is populated on a freshly generated
-    // clip: the API lists clips with a PREVIEW url and treats the export as a second, explicit
-    // step ("Preview-only by design; for the HD file use export_clip"). So clipUrl was "" for
-    // every clip, `done` was never true, and collectRenders retried each candidate until it
-    // expired and recorded "Render timed out (no clips after 2h)" — against projects that had
-    // seventeen finished, scored, portrait clips sitting in them. No clip row was ever written,
-    // which is why nothing reached the review queue, let alone X.
+    // This read `uriForExport ?? export_url` only, and neither is EVER populated by the list
+    // endpoint: clips are preview-only until explicitly exported. So clipUrl was "" for every
+    // clip, `done` was never true, and collectRenders retried each candidate until it expired and
+    // recorded "Render timed out (no clips after 2h)" — against projects holding seventeen
+    // finished, scored, portrait clips. No clip row was ever written, which is why nothing reached
+    // the review queue, let alone X. That is the whole three-week outage, in one `??` chain.
     //
-    // The preview is a real, playable, correctly-cropped MP4, so it is a usable fallback. Its
-    // signed URL is short-lived, which is fine because it is fetched and uploaded immediately,
-    // but an explicit export is the better source if the account's plan offers it — see the
-    // integration note logged by render.ts when a project yields clips with no URL at all.
-    clipUrl: String(
-      c.uriForExport ?? c.export_url ?? c.exportUrl
-      ?? c.previewUrl ?? c.preview_url ?? c.videoUrl ?? c.video_url ?? "",
-    ),
+    // An export field here is still honoured in case a plan populates it, but the real export is
+    // opusclipExportClip() below, called once for the clip the editor actually picks.
+    clipUrl: String(c.uriForExport ?? c.export_url ?? c.exportUrl ?? ""),
+    // The preview is a real, playable, correctly-cropped MP4 — good enough to judge and to post,
+    // but its signed URL is SHORT-LIVED. It is kept separate from clipUrl so the difference is
+    // visible at the call site rather than hidden inside a fallback chain: anything persisted and
+    // replayed later (the public /clips pages read clips.clipUrl) wants the export, not this.
+    previewUrl: String(c.previewUrl ?? c.preview_url ?? c.videoUrl ?? c.video_url ?? ""),
     costUsd: 0,
-    renderPending: Boolean(c.renderAsVideoFile?.pending ?? false),
+    // Both spellings: the vendor's own tooling documents a flat `render_pending`, while the shape
+    // this client was written against nested it under renderAsVideoFile. Unconfirmed either way,
+    // so accept both and default to "not pending" — the URL check is the real readiness gate.
+    renderPending: Boolean(c.render_pending ?? c.renderPending ?? c.renderAsVideoFile?.pending ?? false),
   };
 }
 
@@ -338,6 +379,120 @@ export async function opusclipFetchClips(
     base,
   );
   const clips = asArray(data).map(normalizeClip);
-  const done = clips.some((c) => c.clipUrl && !c.renderPending);
+  // READY means "OpusClip has finished rendering this clip", which is a preview being available —
+  // NOT an export URL being present. Gating on clipUrl was the outage: an export never appears
+  // here no matter how long you wait, so `done` was permanently false. The export is a separate,
+  // explicit step taken once, for the one clip the editor picks (opusclipExportClip below).
+  const done = clips.some((c) => (c.clipUrl || c.previewUrl) && !c.renderPending);
   return { clips, done };
+}
+
+// ── Export: turning a preview into a durable file ───────────────────────────
+
+export type OpusExportStatus = "ready" | "rendering" | "unavailable";
+
+export interface OpusExportResult {
+  status: OpusExportStatus;
+  /** The durable MP4 URL. Only meaningful when status === "ready". */
+  url: string;
+  /** Human-readable note for the log when this is not "ready". */
+  detail: string;
+}
+
+/** REST spellings tried for the export action, in order, until one answers.
+ *
+ *  NOT CONFIRMED — and said plainly rather than asserted, because an unverified "verified" comment
+ *  in this file is what hid the original bug for three weeks. What IS confirmed is the behaviour,
+ *  from the vendor's own tooling: export is per-clip and explicit, it starts the render on demand
+ *  when no artifact exists yet, calling it again never starts a second render (so it is safe to
+ *  retry and safe to poll), and it answers ready | rendering | unavailable.
+ *
+ *  The first spelling that does not 404/405 is remembered for the life of the process. If none
+ *  answer, callers fall back to the preview URL and log loudly — a wrong guess here costs clip
+ *  durability, never the post itself. Confirm the real path with /api/debug/opusclip?projectId=…
+ *  and then delete this list in favour of the single endpoint. */
+const EXPORT_PATH_CANDIDATES = [
+  (p: string, c: string) => ({ path: `/api/exportable-clips/${encodeURIComponent(c)}/export`, body: { projectId: p, target: "hd" } }),
+  (p: string, c: string) => ({ path: `/api/clip-exports`, body: { projectId: p, clipId: c, target: "hd" } }),
+  (p: string, c: string) => ({ path: `/api/exportable-clips?q=export`, body: { projectId: p, clipId: c, target: "hd" } }),
+];
+
+/** Index into EXPORT_PATH_CANDIDATES that last worked, cached per process. -1 = not yet known. */
+let exportPathHint = -1;
+
+function readExport(data: any): OpusExportResult {
+  const raw = String(data?.status ?? data?.data?.status ?? "").toLowerCase();
+  const url = String(
+    data?.export_url ?? data?.exportUrl ?? data?.url ?? data?.uriForExport
+    ?? data?.data?.export_url ?? data?.data?.exportUrl ?? data?.data?.url ?? "",
+  );
+  if (url && (raw === "ready" || raw === "")) return { status: "ready", url, detail: "" };
+  if (raw === "rendering" || raw === "pending" || raw === "processing") {
+    return { status: "rendering", url: "", detail: "export still rendering" };
+  }
+  if (raw === "unavailable" || raw === "failed") {
+    return { status: "unavailable", url: "", detail: `OpusClip reports the export is ${raw}` };
+  }
+  // Answered, but in a shape this client does not recognise. Treat as unavailable rather than
+  // looping: a shape mismatch does not resolve itself by waiting, and the caller logs the body.
+  return {
+    status: "unavailable",
+    url: "",
+    detail: `unrecognised export response: ${JSON.stringify(data).slice(0, 300)}`,
+  };
+}
+
+/** Ask OpusClip for the durable HD file for ONE clip, starting the export if it has not run.
+ *
+ *  Called once per clip that is actually going to be posted — never for every clip in a project.
+ *  Idempotent by the vendor's contract ("calling again never starts a second render"), so a retry
+ *  or a poll cannot double-charge. */
+export async function opusclipExportClip(
+  projectId: string,
+  clipId: string,
+  apiKey: string,
+  base: string,
+): Promise<OpusExportResult> {
+  if (!projectId || !clipId) {
+    return { status: "unavailable", url: "", detail: "missing project or clip id" };
+  }
+
+  const order = exportPathHint >= 0
+    ? [exportPathHint, ...EXPORT_PATH_CANDIDATES.keys()].filter((v, i, a) => a.indexOf(v) === i)
+    : [...EXPORT_PATH_CANDIDATES.keys()];
+
+  let lastErr = "";
+  for (const i of order) {
+    const { path, body } = EXPORT_PATH_CANDIDATES[i](projectId, clipId);
+    try {
+      // retry: true is safe here and nowhere else in this client — this POST is idempotent by
+      // contract, unlike project creation which bills on every call.
+      const data = await opusFetch("POST", path, apiKey, base, body, { retry: true });
+      const parsed = readExport(data);
+      // PIN ONLY ON SUCCESS. This pinned on "did not 404", so a wrong endpoint answering 200 with
+      // an unrecognised body would be cached for the life of the process and make every later
+      // export permanently "unavailable" — the whole fleet falling back to preview URLs forever
+      // because of one bad guess on the first call.
+      if (parsed.status !== "unavailable") exportPathHint = i;
+      return parsed;
+    } catch (e) {
+      const msg = (e as Error).message;
+      lastErr = msg;
+      // Only a "wrong endpoint" answer justifies trying the next spelling. Anything else (401,
+      // 402, 403, 5xx) is a real answer from the right endpoint and must not be papered over by
+      // walking the list.
+      //
+      // Matched against the STATUS, not the whole error string. opusFetch formats failures as
+      // `OpusClip POST <path> <status>: <body>`, and testing the lot meant a 200-with-"404"-in-
+      // the-body, or any body quoting those digits, resumed walking and POSTed to a different
+      // endpoint — exactly what the paragraph above says must not happen.
+      const status = /OpusClip \w+ [^ ]+ (\d{3}):/.exec(msg)?.[1];
+      if (status !== "404" && status !== "405") break;
+    }
+  }
+  return {
+    status: "unavailable",
+    url: "",
+    detail: lastErr || "no export endpoint answered",
+  };
 }
