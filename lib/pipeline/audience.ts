@@ -209,7 +209,12 @@ appeal depends on the viewer already knowing who is speaking.`,
   threshold: 50,
   // Lower than the dev profile: the editor's own rubric is already the harsher gate in this lane,
   // and a 65 floor on top of a ruthless scorer starved the queue.
-  editorialMinScore: 60,
+  //
+  // 40, down from 60. The first clip to be collected in 806 hours went straight to review on the
+  // operator's account while autonomy was "auto", and nothing had posted in a month. 40 still
+  // vetoes the genuinely unshareable while admitting most of what the editor sees. Override
+  // without a code change via the EDITORIAL_MIN_SCORE env var.
+  editorialMinScore: 40,
 };
 
 export const PROFILES: AudienceProfile[] = [AI_DEVELOPER, VIRALITY];
