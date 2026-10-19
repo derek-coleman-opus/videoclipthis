@@ -384,7 +384,16 @@ export async function collectRenders(): Promise<CollectResult> {
       let holdReason = "";
       if (autoPost) {
         const screen = await screenClipForAutoPost(row.title, moment.hookCaption, postText, profile.guardrails);
-        if (!screen.allow) {
+        if (!screen.allow && screen.unavailable) {
+          // The screen did not judge this clip — it could not run. Holding here was a false hold:
+          // it wore the label of a safety decision while being an outage, and a flaky key would
+          // quietly hold every clip the editor had already passed. The editor's verdict stands,
+          // the NSFW regex has already run (it short-circuits before the model call), and the
+          // outage is logged so it does not become the next silent stall.
+          await logEvent("error",
+            `Safety screen unavailable for "${row.title}" — posting on the editor's verdict alone. `
+            + `If this repeats, check ANTHROPIC_API_KEY.`, "candidates", row.id);
+        } else if (!screen.allow) {
           autoPost = false;
           holdReason = screen.reason;
         }

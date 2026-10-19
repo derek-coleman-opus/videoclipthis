@@ -209,13 +209,47 @@ export async function computeHealth(): Promise<HealthReport> {
   const other = submitFails.filter((e) => !isAccountBlock(e.message ?? ""));
   pipeline.submitFailures = submitFails.length;
 
+  // NEW RENDERS HELD BY THIS CLIENT — reported as what it is. These events are written when the
+  // balance floor DECLINES to submit, and deliberately do not use the "Render submit failed"
+  // prefix: no request was sent, so counting them as "REFUSED by OpusClip" (as this file once did)
+  // reported refusals that never happened. Not STALLED either — already-rendered clips still
+  // collect and post; it is only new supply that waits.
+  const declined = Number((await database.select({ n: one }).from(events)
+    .where(and(
+      gte(events.createdAt, since),
+      sql`${events.message} LIKE 'Render submit declined [local:balance]%'`,
+    )))[0]?.n ?? 0);
+  pipeline.submitsDeclined = declined;
+  if (declined > 0) {
+    problems.push(
+      `New renders held: this client declined ${declined} submission(s) in the last `
+      + `${SUBMIT_FAIL_WINDOW_H}h because the OpusClip processing balance reads below the floor. `
+      + `No request was sent, so this is not a refusal from OpusClip. One probe per day still goes `
+      + `through so the real 402-vs-403 answer is recorded — see the activity feed. Clips already `
+      + `rendered are unaffected: re-collect them from the dashboard, free.`,
+    );
+  }
+
   if (blocked.length > 0) {
+    // NAME THE CAUSE. This banner used to explain both 402 and 403 and leave the operator to
+    // guess which — and the guess went wrong twice, sending this account to an upgrade and an
+    // engineering escalation over the wrong one. The split was available the whole time:
+    // accountBlockKind() classifies from the real response, and every one of these events now
+    // comes from a request that was actually sent.
+    const isProxy = (m: string) => /\[account:proxy\]/.test(m) || /ProxyNotAllowed|\s403:/i.test(m);
+    const proxyN = blocked.filter((e) => isProxy(e.message ?? "")).length;
+    const creditN = blocked.length - proxyN;
+    const cause = proxyN && creditN
+      ? `${creditN} were 402 (render balance) and ${proxyN} were 403 (datacenter egress)`
+      : proxyN
+        ? `all ${proxyN} were 403 ProxyNotAllowed — OpusClip refused the request as datacenter `
+          + `egress, which is about the account's entitlement, NOT its balance; adding credit will `
+          + `not fix it`
+        : `all ${creditN} were 402 — the plan's render balance is spent. That is a different meter `
+          + `from the API cap, which can read healthy right next to it`;
     problems.push(
       `STALLED: ${blocked.length} render submission(s) REFUSED by OpusClip in the last `
-      + `${SUBMIT_FAIL_WINDOW_H}h — nothing can enter the render queue no matter how full it looks. `
-      + `402 means the plan's render budget is gone, which is a DIFFERENT meter from the API cap and `
-      + `can sit next to a healthy-looking one; 403 means the account is being refused as datacenter `
-      + `egress. Neither is fixable in code — check the account.`,
+      + `${SUBMIT_FAIL_WINDOW_H}h: ${cause}. Not fixable in code — it is an account matter.`,
     );
   }
 

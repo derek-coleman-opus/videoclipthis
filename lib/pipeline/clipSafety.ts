@@ -20,6 +20,10 @@ const ALLOWED_SUMMON_HOSTS = [
 export interface SafetyVerdict {
   allow: boolean;
   reason: string;
+  /** True when the screen COULD NOT RUN (Anthropic error, timeout, bad key) rather than judging
+   *  the clip. These used to be indistinguishable from a real "unsafe" verdict, so a flaky key
+   *  silently held every clip for review — a false hold wearing the label of a safety decision. */
+  unavailable?: boolean;
 }
 
 /** Hard gate: is this URL on a host summon is willing to clip from? (X status URLs take a
@@ -283,6 +287,8 @@ export async function screenClipForAutoPost(
     );
   } catch (e) {
     slog("clip_safety_error", { hookCaption, error: (e as Error).message });
-    return { allow: false, reason: "safety check unavailable — held for review" };
+    // Still allow:false, so any caller that has not opted in keeps the old fail-closed behaviour.
+    // The flag lets the auto-post path tell "the screen objected" apart from "the screen was down".
+    return { allow: false, unavailable: true, reason: "safety check unavailable" };
   }
 }

@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
-import { db, candidates, runs } from "@/lib/db";
+import { db, candidates, events, runs } from "@/lib/db";
 import { getSettings, parseWatchChannels, parseSearchTopics, updateSummonState } from "@/lib/settings";
 import {
   DAILY_SOURCE_MINUTES_CAP, DEFAULT_THRESHOLD, MAX_CLIPS_PER_RUN, MAX_CONCURRENT_RENDERS,
@@ -191,16 +191,43 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
     try {
       const usage = await opusclipUsage(opusKey, opusBase);
       // The balance first: it is the one that decides whether a render can happen at all.
+      //
+      // THIS FLOOR IS AN INFERENCE, NOT AN OBSERVATION, and it used to log as if it were one. It
+      // wrote "Render submit failed [account:credit]" — the marker reserved for a real 402 — when
+      // no request had been sent at all. Health then reported "N render submission(s) REFUSED by
+      // OpusClip" about refusals that never happened, and, worse, by never letting a request
+      // through it made it impossible to learn whether the real block was 402 (balance) or 403
+      // (datacenter egress). The second has bitten this account before.
+      //
+      // So: declining is logged as a decline, under its own marker, and ONE probe a day goes
+      // through anyway. A refused probe is free (OpusClip bills nothing on a 402 or 403) and its
+      // real answer reaches accountBlockKind(), which classifies it from the actual response.
+      // A probe that succeeds means the balance read was wrong or has reset — a render we wanted.
       if (usage.balanceMinutes != null && usage.balanceMinutes < MIN_RENDER_BALANCE_MIN) {
-        slots = 0;
-        await logEvent("error",
-          `Render submit failed [account:credit] — OpusClip render balance is `
-          + `${usage.balanceMinutes} minute(s), below the `
-          + `${MIN_RENDER_BALANCE_MIN}-minute floor, so no new render can succeed and submitting `
-          + `would just collect 402s. THIS IS THE METER THAT BILLS: the API cap can read healthy `
-          + `(${usage.remaining ?? "?"} left) right next to an empty balance. Top up the plan's `
-          + `processing minutes. Already-rendered clips are unaffected — re-collect them from the `
-          + `dashboard, which costs nothing.`);
+        const probedToday = Number((await database
+          .select({ n: sql<number>`count(*)::int` })
+          .from(events)
+          .where(and(
+            gte(events.createdAt, dayStart),
+            sql`${events.message} LIKE 'Render submit probe%'`,
+          )))[0]?.n ?? 0);
+        if (probedToday === 0) {
+          slots = 1;
+          await logEvent("run",
+            `Render submit probe — the balance reads ${usage.balanceMinutes} minute(s), below the `
+            + `${MIN_RENDER_BALANCE_MIN}-minute floor, so renders are otherwise held. Letting ONE `
+            + `submit through today so OpusClip's real answer is recorded: a 402 confirms the `
+            + `balance, a 403 means datacenter egress instead, a success means the reading was `
+            + `wrong. A refusal costs nothing.`);
+        } else {
+          slots = 0;
+          await logEvent("run",
+            `Render submit declined [local:balance] — this client held new renders because the `
+            + `OpusClip balance reads ${usage.balanceMinutes} minute(s) (floor `
+            + `${MIN_RENDER_BALANCE_MIN}). No request was sent, so this is not a refusal from `
+            + `OpusClip; today's probe has already run and its result is in the activity feed. `
+            + `Already-rendered clips are unaffected — re-collect them from the dashboard, free.`);
+        }
       } else if (!usage.uncapped && usage.remaining != null && usage.remaining < MIN_CREDITS_REMAINING) {
         slots = 0;
         await logEvent("error",
