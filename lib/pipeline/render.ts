@@ -383,7 +383,9 @@ export async function collectRenders(): Promise<CollectResult> {
       // human). Manual review-mode clips skip it — the human approval IS the screen.
       let holdReason = "";
       if (autoPost) {
-        const screen = await screenClipForAutoPost(row.title, moment.hookCaption, postText, profile.guardrails);
+        const screen = await screenClipForAutoPost(
+          row.title, moment.hookCaption, postText, profile.guardrails, profile.screenMode,
+        );
         if (!screen.allow && screen.unavailable) {
           // The screen did not judge this clip — it could not run. Holding here was a false hold:
           // it wore the label of a safety decision while being an outage, and a flaky key would

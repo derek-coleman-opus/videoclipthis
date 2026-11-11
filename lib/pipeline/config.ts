@@ -128,3 +128,12 @@ export const SEARCH_TOPICS = [
 /** Cap on figure+topic search.list calls PER search burst, rotated across runs so the full list
  *  is covered over a day without blowing the daily YouTube quota. ~budget × 100 units per burst. */
 export const SEARCH_BUDGET_PER_BURST = Number(process.env.SEARCH_BUDGET_PER_BURST ?? 12);
+
+/** Ask OpusClip to add its AI-generated "viral hook" title card to the start of each clip.
+ *
+ *  On by default; set OPUSCLIP_AUTO_HOOK=0 to turn it off without a code change. The feature is
+ *  confirmed to exist (the vendor's MCP exposes it as `enableAutoHook`, "an AI-generated hook to the
+ *  start of each clip"), but its REST field name is NOT confirmed — see buildCreateProjectBody. A
+ *  live clip rendered before this flag carried CaptionTrack/EmojiTrack/KeyFrameTrack and no hook
+ *  overlay, so its presence on the next batch is the test of whether the name is right. */
+export const OPUSCLIP_AUTO_HOOK = (process.env.OPUSCLIP_AUTO_HOOK ?? "1") !== "0";

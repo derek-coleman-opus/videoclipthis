@@ -41,6 +41,10 @@ export interface AudienceProfile {
   threshold: number;
   /** Shareability floor for the editor. Below this a clip is not auto-posted. */
   editorialMinScore: number;
+  /** How hard the pre-post safety screen leans. "strict" refuses anything it is unsure about;
+   *  "lenient" refuses only the hard blocks and passes public figures speaking publicly, however
+   *  controversial. See postScreenPrompt in clipSafety.ts. */
+  screenMode: "strict" | "lenient";
 }
 
 /** The original account: AI / developer tooling. Rubric and brief text are carried over verbatim
@@ -105,6 +109,7 @@ minutes to land.`,
   ],
   threshold: 70,
   editorialMinScore: 65,
+  screenMode: "strict",
 };
 
 /** Broad general interest — reach first. Culture, sport, money, celebrity, courtroom.
@@ -215,6 +220,10 @@ appeal depends on the viewer already knowing who is speaking.`,
   // vetoes the genuinely unshareable while admitting most of what the editor sees. Override
   // without a code change via the EDITORIAL_MIN_SCORE env var.
   editorialMinScore: 40,
+  // Lenient: this lane IS controversial public-figure moments, and the strict screen's "when
+  // unsure, answer not safe" refused the category wholesale — seven of the first day's clips were
+  // held for review with autonomy on "auto" and nothing posted. The operator asked for it loosened.
+  screenMode: "lenient",
 };
 
 export const PROFILES: AudienceProfile[] = [AI_DEVELOPER, VIRALITY];

@@ -4,7 +4,7 @@ import { getSettings, parseWatchChannels, parseSearchTopics, updateSummonState }
 import {
   DAILY_SOURCE_MINUTES_CAP, DEFAULT_THRESHOLD, MAX_CLIPS_PER_RUN, MAX_CONCURRENT_RENDERS,
   MAX_SOURCE_MINUTES_PER_VIDEO, MAX_SUBMIT_ATTEMPTS, MIN_CREDITS_REMAINING, MIN_RENDER_BALANCE_MIN,
-  RENDER_SUBMIT_MULTIPLIER, FIGURE_SEARCH_INTERVAL_H,
+  OPUSCLIP_AUTO_HOOK, RENDER_SUBMIT_MULTIPLIER, FIGURE_SEARCH_INTERVAL_H,
   SEARCH_TOPICS, SEARCH_BUDGET_PER_BURST, WATCHLIST,
 } from "./config";
 import { requireScoutEnv } from "./env";
@@ -127,6 +127,7 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
   const threshold = cfg.threshold ?? DEFAULT_THRESHOLD;
 
   let found = 0, rendering = 0, queued = 0, skipped = 0;
+  let hookRejectionLogged = false;
 
   // Render backpressure: OpusClip caps concurrent projects, so only submit up to the number of
   // free slots. Candidates that pass the gate but can't fit are left "scored" and submitted on a
@@ -299,7 +300,19 @@ export async function runScout(opts?: { force?: boolean }): Promise<ScoutResult>
         // regardless of which audience the rest of the pipeline is serving.
         brief: cfg.curationBrief?.trim() || profile.curationBrief,
         guardrails: profile.guardrails,
-      }, cfg.opusBrandTemplateId);
+      }, cfg.opusBrandTemplateId, {
+        autoHook: OPUSCLIP_AUTO_HOOK,
+        onOptionsDropped: async (detail) => {
+          // Once per run: the field name is wrong for every submit, not just this one.
+          if (hookRejectionLogged) return;
+          hookRejectionLogged = true;
+          await logEvent("error",
+            `OpusClip rejected the viral-hook option, so renders are being submitted WITHOUT a hook. `
+            + `The REST field name in buildCreateProjectBody (renderPref.quickstartConfig.`
+            + `enableAutoHook) is wrong — ask OpusClip for the correct one, or set `
+            + `OPUSCLIP_AUTO_HOOK=0 to stop trying. Renders are unaffected. ${detail}`.slice(0, 600));
+        },
+      });
       await database.update(candidates)
         .set({ status: "rendering", opusProjectId: projectId, renderStartedAt: new Date() })
         .where(eq(candidates.id, c.id));

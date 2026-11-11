@@ -2,7 +2,7 @@ import { eq, inArray, sql } from "drizzle-orm";
 import { db, candidates, summonRequests } from "@/lib/db";
 import { requireScoutEnv, requireXEnv, requireXReadEnv } from "./env";
 import { getSettings, updateSummonState } from "@/lib/settings";
-import { MAX_CONCURRENT_RENDERS } from "./config";
+import { MAX_CONCURRENT_RENDERS, OPUSCLIP_AUTO_HOOK } from "./config";
 import { opusclipCreateProject } from "./opusclip";
 import {
   allowedSummonUrl, fetchOEmbedMeta, fetchVideoDurationS, MIN_SUMMON_VIDEO_S,
@@ -130,7 +130,10 @@ export async function runSummon(): Promise<SummonResult> {
 
     // The safety gate passed; skip only the RELEVANCE gate (a human asked): submit the render.
     try {
-      const projectId = await opusclipCreateProject(gate.url, opusKey, opusBase, {}, cfg.opusBrandTemplateId);
+      const projectId = await opusclipCreateProject(gate.url, opusKey, opusBase, {}, cfg.opusBrandTemplateId, {
+        autoHook: OPUSCLIP_AUTO_HOOK,
+        onOptionsDropped: (detail) => slog("summon_hook_option_dropped", { detail: detail.slice(0, 300) }),
+      });
       await database.update(candidates)
         .set({ status: "rendering", opusProjectId: projectId, renderStartedAt: new Date() })
         .where(eq(candidates.id, cand.id));

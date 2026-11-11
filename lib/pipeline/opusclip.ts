@@ -146,10 +146,16 @@ export function buildCurationPrompt(ctx: CurationContext = {}): string {
  *  (github.com/opus-pro/opus-skills): clipDurations is an array of [min,max] second ranges,
  *  layoutAspectRatio is portrait|landscape|square (NOT "9:16"). Shared with the debug probe so
  *  the two never drift. */
+export interface CreateOptions {
+  /** Request OpusClip's AI hook title card. See OPUSCLIP_AUTO_HOOK in ./config. */
+  autoHook?: boolean;
+}
+
 export function buildCreateProjectBody(
   videoUrl: string,
   ctx: CurationContext = {},
   brandTemplateId?: string | null,
+  opts: CreateOptions = {},
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     videoUrl,
@@ -162,7 +168,20 @@ export function buildCreateProjectBody(
     },
     renderPref: {
       layoutAspectRatio: "portrait", // 9:16 vertical
-      quickstartConfig: { enableRemoveFillerWords: true },
+      // Speech cleanup and the viral hook live in quickstartConfig — the web app's quickstart
+      // toggles. Captions are NOT set here on purpose: a live clip already carries CaptionTrack
+      // from the account default, and forcing a value could override the brand template's style.
+      //
+      // `enableAutoHook` is UNCONFIRMED as the REST spelling. The feature is confirmed (the
+      // vendor's MCP exposes `enableAutoHook`), but that MCP calls filler removal `removeFiller`
+      // while REST calls it `enableRemoveFillerWords` — so MCP names are evidence of the feature,
+      // not of the wire format. Placed beside the one field known to work. If OpusClip rejects it,
+      // opusclipCreateProject resubmits without it; if OpusClip silently ignores it, the next
+      // batch's clips will have no hook overlay track, which is the check to run.
+      quickstartConfig: {
+        enableRemoveFillerWords: true,
+        ...(opts.autoHook ? { enableAutoHook: true } : {}),
+      },
     },
   };
   // A brand template (configured in the OpusClip dashboard) drives the vertical layout + caption
@@ -225,18 +244,42 @@ export function accountBlockNote(kind: AccountBlock): string {
 }
 
 /** Submit a long video for clipping; returns the project id (rendering continues server-side). */
+/** A 4xx that means "your request body is wrong", as distinct from the account-level refusals
+ *  (402 credit, 403 proxy) and rate limiting (429). Nothing is created on these, so a resubmit
+ *  with a different body cannot double-bill. */
+function isBodyRejected(e: unknown): boolean {
+  const status = /\s(\d{3}):/.exec((e as Error)?.message ?? String(e))?.[1];
+  return status === "400" || status === "422";
+}
+
 export async function opusclipCreateProject(
   videoUrl: string,
   apiKey: string,
   base: string,
   ctx: CurationContext = {},
   brandTemplateId?: string | null,
+  opts: CreateOptions & {
+    /** Called when OpusClip refused the optional enhancements and the project was created without
+     *  them. Fires ONLY when the retry succeeded, i.e. when the enhancement was provably the cause
+     *  — a bad video URL fails both attempts and never reaches this. */
+    onOptionsDropped?: (detail: string) => void;
+  } = {},
 ): Promise<string> {
-  const data = await opusFetch(
+  const post = (o: CreateOptions) => opusFetch(
     "POST", "/api/clip-projects", apiKey, base,
-    buildCreateProjectBody(videoUrl, ctx, brandTemplateId),
+    buildCreateProjectBody(videoUrl, ctx, brandTemplateId, o),
     { retry: false }, // billed + non-idempotent — never auto-repeat (see opusFetch)
   );
+  let data: any;
+  try {
+    data = await post(opts);
+  } catch (first) {
+    // A guessed field name must never be able to halt rendering. If OpusClip rejects the body and
+    // we sent an optional enhancement, resubmit once without it. Safe: a 400/422 creates nothing.
+    if (!opts.autoHook || !isBodyRejected(first)) throw first;
+    data = await post({ ...opts, autoHook: false });
+    opts.onOptionsDropped?.((first as Error).message);
+  }
   const proj = data.data ?? data.project ?? data;
   // `project_id` first: the live data model is snake_case throughout (clip_id, duration_sec,
   // preview_url, remaining_minutes). Missing it here is the expensive kind of miss — the project

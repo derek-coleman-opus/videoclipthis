@@ -244,7 +244,40 @@ export async function screenSummonTarget(
  *  rather than a second, contradictory one. The harm categories below are unchanged and
  *  non-negotiable; what changed is that disagreement between public figures is no longer treated
  *  as harm. "Unsure → not safe" and the fail-closed catch below both stay. */
-function postScreenPrompt(guardrails: string[]): string {
+/** The LENIENT screen, for lanes whose whole subject is controversial public-figure moments.
+ *
+ *  The strict prompt below ends "when genuinely unsure, answer not safe", and on tabloid, sports and
+ *  political material the model is unsure about nearly everything — so it held the category
+ *  wholesale. This one inverts the default: it lists the few things that are never posted
+ *  unattended and passes everything else a public figure said in public, including on race,
+ *  politics, sex, drugs, crime and conspiracy. The hard blocks are deliberately kept: they are the
+ *  difference between edgy and something that gets an account suspended. */
+function lenientScreenPrompt(guardrails: string[]): string {
+  return `You are a brand-safety gate for a video clip that an automated bot is about to post
+publicly on X with NO human review. The account posts viral moments: celebrities, athletes,
+politicians, podcasters and commentators saying bold, controversial or embarrassing things.
+Judge from the clip's title/caption and post text.
+
+It is NOT safe ONLY if it clearly contains:
+- explicit sexual content or nudity (talking ABOUT sex, dating or relationships is fine)
+- graphic gore or graphic violence shown on screen
+- a slur used to attack or demean a group (a public figure discussing racism, or recounting
+  being called a slur, is NOT this)
+- encouragement of self-harm or suicide
+- mocking, humiliating or exposing a PRIVATE individual who did not choose to be on camera
+- a moment whose appeal is the suffering of real victims of a specific recent tragedy
+
+Everything else a public figure says publicly IS safe, including: race, politics, religion,
+sexuality, drugs, crime allegations, conspiracy theories, feuds, insults between public figures,
+profanity, the death of a public figure, and claims that are false or offensive. Reposting a
+public figure's controversial statement is commentary, not endorsement.
+${guardrails.length ? `\nThe account's own editorial guardrails also apply:\n${guardrails.map((g) => `- ${g}`).join("\n")}\n` : ""}
+If none of the blocks above clearly applies, answer safe.
+Return JSON: {"safe": true|false, "reason": "<short>"}.`;
+}
+
+function postScreenPrompt(guardrails: string[], mode: "strict" | "lenient" = "strict"): string {
+  if (mode === "lenient") return lenientScreenPrompt(guardrails);
   return `You are a brand-safety gate for a video clip that an automated bot is about to post
 publicly on X with NO human review. Judge from the clip's title/caption and post text.
 
@@ -272,13 +305,14 @@ export async function screenClipForAutoPost(
   hookCaption: string,
   postText: string,
   guardrails: string[] = [],
+  mode: "strict" | "lenient" = "strict",
 ): Promise<SafetyVerdict> {
   if (NSFW_RE.test(`${videoTitle} ${hookCaption} ${postText}`)) {
     return { allow: false, reason: "clip text matches adult-content filter" };
   }
   try {
     return await claudeVerdict(
-      postScreenPrompt(guardrails),
+      postScreenPrompt(guardrails, mode),
       [
         videoTitle ? `Source video title: ${videoTitle}` : "",
         hookCaption ? `Clip caption/hook: ${hookCaption}` : "",
